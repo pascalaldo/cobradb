@@ -4,7 +4,7 @@
 
 from configparser import ConfigParser, NoOptionError
 import os
-from os.path import join, split, abspath, isfile, expanduser, dirname
+from os.path import join, normpath, split, abspath, isfile, expanduser, dirname
 from sys import modules
 import six
 
@@ -15,7 +15,8 @@ self = modules[__name__]
 config = ConfigParser()
 
 # overwrite defaults settings with settings from the file
-filepath = abspath(join(dirname(__file__), '..', 'settings.ini'))
+#filepath = abspath(join(dirname(__file__), '..', 'settings.ini'))
+filepath = normpath('settings.ini')
 if isfile(filepath):
     config.read(filepath)
 else:
