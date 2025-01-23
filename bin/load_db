@@ -67,14 +67,16 @@ def drop_all_tables(engine, enums_to_drop=None):
 
     table_sql = ("SELECT table_name FROM information_schema.tables "
                  "WHERE table_schema='public' AND table_name NOT LIKE 'pg_%%'")
-
-    for table in [name for (name, ) in engine.execute(text(table_sql))]:
-        engine.execute(text('DROP TABLE %s CASCADE' % table))
+    
+    with engine.begin() as conn:
+        for table in [name for (name, ) in conn.execute(text(table_sql))]:
+           conn.execute(text('DROP TABLE %s CASCADE' % table))
 
     # drop the enum types
     if enums_to_drop is not None:
-        for enum in enums_to_drop:
-            engine.execute(text('DROP TYPE IF EXISTS %s CASCADE' % enum))
+        with engine.begin() as conn:
+            for enum in enums_to_drop:
+               conn.execute(text('DROP TYPE IF EXISTS %s CASCADE' % enum))
 
 
 if __name__ == '__main__':
@@ -83,17 +85,13 @@ if __name__ == '__main__':
         drop_all_tables(engine, custom_enums.keys())
 
     logging.info('Building the database models')
-    Base.metadata.create_all()
+    Base.metadata.create_all(bind=engine)
 
     if args.drop_models:
+        from sqlalchemy.sql.expression import text
         logging.info('Dropping rows from models')
-        connection = engine.connect()
-        trans = connection.begin()
-        try:
-            connection.execute('TRUNCATE model, reaction, component, compartment, deprecated_id CASCADE;')
-            trans.commit()
-        except:
-            trans.rollback()
+        with engine.begin() as conn:
+            conn.execute(text('TRUNCATE model, reaction, component, compartment, deprecated_id CASCADE;'))
 
     # make the session
     session = Session()

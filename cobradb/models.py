@@ -7,15 +7,14 @@ from cobradb.settings import db_connection_string
 from sqlalchemy import (ForeignKey, Column, Integer, String, Float, Table,
                         LargeBinary, Boolean, create_engine, MetaData, Enum,
                         DateTime, UniqueConstraint)
-from sqlalchemy.orm import sessionmaker, Session as _SA_Session
-from sqlalchemy.ext.declarative import declarative_base
-
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base
 
 # Connect to postgres
 engine = create_engine(db_connection_string)
-Base = declarative_base(bind=engine)
-metadata = MetaData(bind=engine)
-Session = sessionmaker(bind=engine, class_=_SA_Session)
+Base = declarative_base()
+metadata = MetaData()
+Session = sessionmaker(bind=engine)
 
 
 # Make the enums
