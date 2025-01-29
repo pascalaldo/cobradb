@@ -31,7 +31,7 @@ class GenbankNotFound(Exception):
 def get_model_list():
     """Get the models that are available, as SBML, in ome_data/models"""
     return [x.replace('.xml', '').replace('.mat', '') for x in
-            os.listdir(join(settings.data_directory, 'models'))
+            os.listdir(settings.model_directory)
             if '.xml' in x or '.mat' in x]
 
 
@@ -928,6 +928,7 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
                       .query(Chromosome.id)
                       .filter(Chromosome.genome_id == model_db.genome_id)
                       .all())
+    chromosome_ids = [c.id for c in chromosome_ids]
     if len(chromosome_ids) == 0:
         logging.warning('No chromosomes for model %s' % model_db.bigg_id)
 

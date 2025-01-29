@@ -17,4 +17,6 @@ RUN python setup.py install
 # Install reqs  
 
 #COPY settings.ini /app/settings.ini
+#COPY settings.small.ini /app/settings.ini
+#CMD ["bin/load_db", "--drop-all"]
 CMD ["bin/load_db", "--drop-all"]

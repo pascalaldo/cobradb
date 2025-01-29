@@ -21,7 +21,7 @@ def configure_logger(log_file=None, level=logging.INFO, overwrite_log=True,
         console.setFormatter(logging.Formatter(format))
         logging.getLogger('').addHandler(console)
 configure_logger('%s COBRAdb load_db.log' % time.strftime('%Y-%m-%d %H:%M:%S'),
-                 level=logging.INFO)
+                 level=logging.DEBUG)
 
 
 from cobradb.models import *
@@ -219,6 +219,7 @@ if __name__ == '__main__':
             except AlreadyLoadedError as e:
                 logging.info(str(e))
             except Exception as e:
+                print(f"model_dir: '{model_dir}', model_path: '{join(model_dir, model_dict['model_filename'])}'")
                 logging.error('Could not load model %s.' % model_dict['model_filename'])
                 logging.exception(e)
 
