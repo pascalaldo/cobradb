@@ -462,6 +462,7 @@ def _new_reaction(session, reaction, bigg_id, reaction_hash, model_db_id, model,
 
     # for each reactant, add to the reaction matrix
     for metabolite, stoich in six.iteritems(reaction.metabolites):
+        stoich = float(stoich)
         # get the component in the model
         try:
             comp_comp_db_id = comp_comp_db_ids[metabolite.id]
