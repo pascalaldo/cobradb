@@ -13,14 +13,17 @@ services:
       - biggr-net
     volumes:
       - /data/biggr-genbank:/genbank
+      - /data/biggr-assemblies:/assemblies
     stdin_open: true
     tty: true
   biggr-db:
     container_name: cobradb-postgres
     image: postgres
+    command: -c config_file=/etc/postgresql.conf
     restart: always
     volumes:
       - /data/biggr-postgres:/var/lib/postgresql/data
+      - ./postgresql.conf:/etc/postgresql.conf
     ports:
       - "5432:5432"
     healthcheck:

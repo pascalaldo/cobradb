@@ -18,5 +18,5 @@ RUN python setup.py install
 
 #COPY settings.ini /app/settings.ini
 #COPY settings.small.ini /app/settings.ini
-#CMD ["bin/load_db", "--drop-all"]
+#CMD ["bin/load_db", "--skip-genomes"]
 CMD ["bin/load_db", "--drop-all"]
