@@ -6,6 +6,7 @@ import logging
 import time
 import sys
 from pathlib import Path
+import cProfile
 
 
 def configure_logger(
@@ -95,7 +96,7 @@ def drop_all_tables(engine, enums_to_drop=None):
                 conn.execute(text("DROP TYPE IF EXISTS %s CASCADE" % enum))
 
 
-if __name__ == "__main__":
+def main():
     start_time = time.time()
     timings = {}
 
@@ -269,3 +270,8 @@ if __name__ == "__main__":
     logging.debug(str(timings))
     session.close()
     close_all_sessions()
+
+
+if __name__ == "__main__":
+    # main()
+    cProfile.run("main()")

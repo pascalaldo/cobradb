@@ -1016,7 +1016,7 @@ def load_reactions(
                 subsystem=subsystem,
             )
             session.add(model_reaction_db)
-            # session.commit()
+            session.commit()
         ctx["model_reaction_db"] = model_reaction_db
     session.commit()
     logging.info(f"CP 3: {time.time() - start_time}")
