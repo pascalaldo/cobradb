@@ -234,7 +234,9 @@ def load_chromosome(record, genome_db, session):
 
     # update genome
     if genome_db.organism is None:
+        logging.warning(f"Organism: {record.annotations['organism']}")
         genome_db.organism = record.annotations["organism"]
+        session.commit()
 
     bigg_id_warnings = 0
     duplicate_genes_warnings = 0

@@ -2,6 +2,7 @@
 
 from cobradb.models import *
 from cobradb import settings
+from cobradb.model_dumping import dump_model
 from cobradb import parse
 from cobradb.util import (
     increment_id,
@@ -15,13 +16,21 @@ from cobradb.util import (
     timing,
 )
 
+from sqlalchemy.orm.exc import MultipleResultsFound, NoResultFound
 from sqlalchemy import func
 import re
 import logging
 from collections import defaultdict
 import os
+from os.path import join, basename, abspath, dirname
 from difflib import SequenceMatcher
 
+try:
+    from itertools import ifilter as filter
+except ImportError:
+    pass
+import cobra.io
+import six
 import time
 
 
@@ -107,38 +116,35 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
         raise AlreadyLoadedError("Model %s already loaded" % model_bigg_id)
 
     # check for a genome annotation for this model
-    # if genome_ref is not None and genome_ref[0] == "organism":
-    #     genome_id = None
-    #     organism = genome_ref[1]
-    # elif genome_ref is not None and genome_ref[0] in [
-    #     "ncbi_accession",
-    #     "ncbi_assembly",
-    # ]:
-    #     genome_db = (
-    #         session.query(Genome)
-    #         .filter(Genome.accession_type == genome_ref[0])
-    #         .filter(Genome.accession_value == genome_ref[1])
-    #         .first()
-    #     )
-    #     if genome_db is None:
-    #         raise GenbankNotFound(
-    #             "Genome for model {} not found with genome_ref {}".format(
-    #                 model_bigg_id, genome_ref
-    #             )
-    #         )
-    #     genome_id = genome_db.id
-    #     organism = genome_db.organism
-    # else:
-    #     logging.info(
-    #         "No Genome reference or organism provided for model {}".format(
-    #             model_bigg_id
-    #         )
-    #     )
-    #     genome_id = None
-    #     organism = None
-    #
-    genome_id = None
-    organism = None
+    if genome_ref is not None and genome_ref[0] == "organism":
+        genome_id = None
+        organism = genome_ref[1]
+    elif genome_ref is not None and genome_ref[0] in [
+        "ncbi_accession",
+        "ncbi_assembly",
+    ]:
+        genome_db = (
+            session.query(Genome)
+            .filter(Genome.accession_type == genome_ref[0])
+            .filter(Genome.accession_value == genome_ref[1])
+            .first()
+        )
+        if genome_db is None:
+            raise GenbankNotFound(
+                "Genome for model {} not found with genome_ref {}".format(
+                    model_bigg_id, genome_ref
+                )
+            )
+        genome_id = genome_db.id
+        organism = genome_db.organism
+    else:
+        logging.info(
+            "No Genome reference or organism provided for model {}".format(
+                model_bigg_id
+            )
+        )
+        genome_id = None
+        organism = None
 
     # Load the model objects. Remember: ORDER MATTERS! So don't mess around.
     logging.debug("Loading objects for model {}".format(model.id))
@@ -169,24 +175,24 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
         old_parsed_ids["metabolites"],
     )
 
-    # # reactions
-    # model_db_rxn_ids = load_reactions(
-    #     session,
-    #     model_database_id,
-    #     model,
-    #     old_parsed_ids["reactions"],
-    #     comp_comp_db_ids,
-    #     final_metabolite_ids,
-    # )
-    #
-    # # genes
-    # load_genes(
-    #     session, model_database_id, model, model_db_rxn_ids, old_parsed_ids["genes"]
-    # )
-    #
-    # # count model objects for the model summary web page
-    # load_model_count(session, model_database_id)
-    #
+    # reactions
+    model_db_rxn_ids = load_reactions(
+        session,
+        model_database_id,
+        model,
+        old_parsed_ids["reactions"],
+        comp_comp_db_ids,
+        final_metabolite_ids,
+    )
+
+    # genes
+    load_genes(
+        session, model_database_id, model, model_db_rxn_ids, old_parsed_ids["genes"]
+    )
+
+    # count model objects for the model summary web page
+    load_model_count(session, model_database_id)
+
     session.commit()
 
     return model_bigg_id

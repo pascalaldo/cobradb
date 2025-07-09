@@ -29,6 +29,14 @@ Base = declarative_base()
 metadata = MetaData()
 Session = sessionmaker(bind=engine)
 
+COL_ID_STR = String(100)
+COL_NAME_STR = String(400)
+COL_HTML_NAME_STR = String(1000)
+COL_FORMULA_STR = String(1000)
+COL_CHARGE_STR = String(100)
+COL_COEFFICIENT_STR = String(100)
+COL_COMPARTMENT_STR = String(10)
+COL_EQUATION_STR = String(5000)
 
 # Make the enums
 _enum_l = [
@@ -53,6 +61,14 @@ _enum_l = [
         "model_reaction",
         name="escher_map_matrix_type",
     ),
+    Enum(
+        "small_molecule",
+        "generic_polypeptide",
+        "generic_polynucleotide",
+        "polymer",
+        name="compound_type",
+    ),
+    Enum("L", "R", name="reaction_side"),
 ]
 custom_enums = {x.name: x for x in _enum_l}
 
@@ -143,40 +159,70 @@ class GenomeRegion(Base):
         )
 
 
+class ReferenceCompound(Base):
+    __tablename__ = "reference_compound"
+
+    id = Column(COL_ID_STR, primary_key=True)
+    name = Column(COL_NAME_STR, nullable=False)
+    html_name = Column(COL_HTML_NAME_STR, nullable=True)
+    compound_type = Column(custom_enums["compound_type"], nullable=False)
+    charge = Column(COL_CHARGE_STR, nullable=True)
+    formula = Column(COL_FORMULA_STR, nullable=True)
+
+    def __repr__(self):
+        return (
+            "<cobradb ReferenceCompound(id={self.id}, name={self.name}, "
+            "comound_type={self.compound_type})>".format(self=self)
+        )
+
+
+class UniversalComponent(Base):
+    __tablename__ = "universal_component"
+
+    id = Column(COL_ID_STR, primary_key=True)
+    name = Column(COL_NAME_STR, nullable=True)
+
+
 class Component(Base):
     __tablename__ = "component"
 
-    id = Column(Integer, primary_key=True)
-    bigg_id = Column(String)
+    id = Column(COL_ID_STR, primary_key=True)
+    universal_id = Column(COL_ID_STR, ForeignKey(UniversalComponent.id), nullable=False)
     name = Column(String, nullable=True)
-    type = Column(String(20))
+    # type = Column(String(20))
+    formula = Column(String, nullable=False)
+    charge = Column(Integer, nullable=False)
 
-    __table_args__ = (UniqueConstraint("bigg_id"), {})
-
-    __mapper_args__ = {"polymorphic_identity": "component", "polymorphic_on": type}
+    # __mapper_args__ = {"polymorphic_identity": "component", "polymorphic_on": type}
 
     def __repr__(self):
-        return "Component (#%d):  %s" % (self.id, self.name)
+        return f"Component ({self.id}): {self.name}"
+
+
+class ComponentReferenceMapping(Base):
+    __tablename__ = "component_reference_mapping"
+
+    id = Column(Integer, primary_key=True)
+    component_id = Column(COL_ID_STR, ForeignKey(Component.id), nullable=False)
+    universal_id = Column(COL_ID_STR, ForeignKey(UniversalComponent.id), nullable=False)
+    reference_id = Column(COL_ID_STR, ForeignKey(ReferenceCompound.id), nullable=False)
+    reference_n = Column(Integer, nullable=True)
 
 
 class Reaction(Base):
     __tablename__ = "reaction"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(COL_ID_STR, primary_key=True)
     type = Column(String(20))
-    bigg_id = Column(String, nullable=False)
     name = Column(String, nullable=True)
     reaction_hash = Column(String, nullable=False)
     pseudoreaction = Column(Boolean, default=False)
 
-    __table_args__ = (UniqueConstraint("bigg_id"),)
-
     __mapper_args__ = {"polymorphic_identity": "reaction", "polymorphic_on": type}
 
     def __repr__(self):
-        return "<cobradb Reaction(id=%d, bigg_id=%s%s)>" % (
+        return "<cobradb Reaction(id=%d)>" % (
             self.id,
-            self.bigg_id,
             ", pseudoreaction" if self.pseudoreaction else "",
         )
 
@@ -227,7 +273,7 @@ class Publication(Base):
 class PublicationModel(Base):
     __tablename__ = "publication_model"
     model_id = Column(
-        Integer, ForeignKey("model.id", ondelete="CASCADE"), primary_key=True
+        COL_ID_STR, ForeignKey("model.id", ondelete="CASCADE"), primary_key=True
     )
     publication_id = Column(
         Integer, ForeignKey("publication.id", ondelete="CASCADE"), primary_key=True
@@ -298,15 +344,12 @@ class DeprecatedID(Base):
 class Model(Base):
     __tablename__ = "model"
 
-    id = Column(Integer, primary_key=True)
-    bigg_id = Column(String, nullable=False)
+    id = Column(COL_ID_STR, primary_key=True)
     genome_id = Column(
         Integer, ForeignKey("genome.id", onupdate="CASCADE", ondelete="CASCADE")
     )
     organism = Column(String(200), nullable=True)
     published_filename = Column(String, nullable=True)
-
-    __table_args__ = (UniqueConstraint("bigg_id", "genome_id"),)
 
     def __repr__(self):
         return "<cobradb Model(id={self.id}, bigg_id={self.bigg_id})>".format(self=self)
@@ -317,7 +360,7 @@ class ModelGene(Base):
 
     id = Column(Integer, primary_key=True)
     model_id = Column(
-        Integer,
+        COL_ID_STR,
         ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
@@ -335,12 +378,12 @@ class ModelReaction(Base):
 
     id = Column(Integer, primary_key=True)
     reaction_id = Column(
-        Integer,
+        COL_ID_STR,
         ForeignKey("reaction.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
     model_id = Column(
-        Integer,
+        COL_ID_STR,
         ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
@@ -386,14 +429,14 @@ class GeneReactionMatrix(Base):
 
 class CompartmentalizedComponent(Base):
     __tablename__ = "compartmentalized_component"
-    id = Column(Integer, primary_key=True)
+    id = Column(COL_ID_STR, primary_key=True)
     component_id = Column(
-        Integer,
+        COL_ID_STR,
         ForeignKey("component.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
     compartment_id = Column(
-        Integer,
+        COL_ID_STR,
         ForeignKey("compartment.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
@@ -405,12 +448,12 @@ class ModelCompartmentalizedComponent(Base):
     __tablename__ = "model_compartmentalized_component"
     id = Column(Integer, primary_key=True)
     model_id = Column(
-        Integer,
+        COL_ID_STR,
         ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
     compartmentalized_component_id = Column(
-        Integer, ForeignKey("compartmentalized_component.id"), nullable=False
+        COL_ID_STR, ForeignKey("compartmentalized_component.id"), nullable=False
     )
     formula = Column(String, nullable=True)
     charge = Column(Integer, nullable=True)
@@ -420,22 +463,19 @@ class ModelCompartmentalizedComponent(Base):
 
 class Compartment(Base):
     __tablename__ = "compartment"
-    id = Column(Integer, primary_key=True)
-    bigg_id = Column(String, unique=True)
+    id = Column(COL_ID_STR, primary_key=True)
     name = Column(String)
 
     def __repr__(self):
-        return "<cobradb Compartment(id={self.id}, bigg_id={self.bigg_id})>".format(
-            self=self
-        )
+        return "<cobradb Compartment(id={self.id})>".format(self=self)
 
 
 class ReactionMatrix(Base):
     __tablename__ = "reaction_matrix"
     id = Column(Integer, primary_key=True)
-    reaction_id = Column(Integer, ForeignKey("reaction.id"), nullable=False)
+    reaction_id = Column(COL_ID_STR, ForeignKey("reaction.id"), nullable=False)
     compartmentalized_component_id = Column(
-        Integer,
+        COL_ID_STR,
         ForeignKey(
             "compartmentalized_component.id", onupdate="CASCADE", ondelete="CASCADE"
         ),
@@ -453,7 +493,7 @@ class EscherMap(Base):
     id = Column(Integer, primary_key=True)
     map_name = Column(String, nullable=False)
     map_data = Column(LargeBinary, nullable=False)
-    model_id = Column(Integer, ForeignKey(Model.id), nullable=False)
+    model_id = Column(COL_ID_STR, ForeignKey(Model.id), nullable=False)
     priority = Column(Integer, nullable=False)
 
     __table_args__ = (UniqueConstraint("map_name"),)
@@ -475,7 +515,7 @@ class ModelCount(Base):
     __tablename__ = "model_count"
     id = Column(Integer, primary_key=True)
     model_id = Column(
-        Integer,
+        COL_ID_STR,
         ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
@@ -505,3 +545,76 @@ class Gene(GenomeRegion):
             self.bigg_id,
             self.name,
         )
+
+
+class ReferenceReactivePart(Base):
+    __tablename__ = "reference_reactive_part"
+
+    id = Column(COL_ID_STR, primary_key=True)
+    name = Column(COL_NAME_STR, nullable=False)
+    html_name = Column(COL_HTML_NAME_STR, nullable=True)
+    formula = Column(COL_FORMULA_STR, nullable=True)
+    charge = Column(COL_CHARGE_STR, nullable=True)
+
+    def __repr__(self):
+        return (
+            "<cobradb ReferenceReactivePart(id={self.id}, "
+            "accession={self.accession}>"
+        ).format(self=self)
+
+
+class ReferenceReactivePartMatrix(Base):
+    __tablename__ = "reference_reactive_part_matrix"
+
+    id = Column(Integer, primary_key=True)
+    compound_id = Column(COL_ID_STR, ForeignKey(ReferenceCompound.id), nullable=False)
+    reactive_part_id = Column(
+        COL_ID_STR, ForeignKey(ReferenceReactivePart.id), nullable=False
+    )
+
+    def __repr__(self):
+        return (
+            "<cobradb ReferenceReactivePartMatrix(id={self.id}, "
+            "compound_id={self.compound_id}, "
+            "reactive_part_id={self.reactive_part_id}>"
+        ).format(self=self)
+
+
+class ReferenceReaction(Base):
+    __tablename__ = "reference_reaction"
+
+    id = Column(COL_ID_STR, primary_key=True)
+    equation = Column(COL_EQUATION_STR, nullable=True)
+
+    def __repr__(self):
+        return (
+            "<cobradb ReferenceReaction(id={self.id}, "
+            "accession={self.accession}, "
+            "equation='{self.equation}'>"
+        ).format(self=self)
+
+
+class ReferenceReactionParticipant(Base):
+    __tablename__ = "reference_reaction_participant"
+
+    id = Column(Integer, primary_key=True)
+    reaction_id = Column(COL_ID_STR, ForeignKey(ReferenceReaction.id), nullable=False)
+    compound_id = Column(COL_ID_STR, ForeignKey(ReferenceCompound.id), nullable=False)
+    side = Column(custom_enums["reaction_side"], nullable=False)
+    coefficient = Column(COL_COEFFICIENT_STR, nullable=False)
+    compartment = Column(COL_COMPARTMENT_STR, nullable=False)
+
+    def __repr__(self):
+        return (
+            f"<cobradb ReferenceReactionParticipant(id={self.id}, "
+            f"reaction_id={self.reaction_id}, "
+            f"compound_id={self.compound_id}, side={self.side}, "
+            f"coefficient={self.coefficient}, compartment={self.compartment})"
+        )
+
+
+class ComponentIDMapping(Base):
+    __tablename__ = "component_id_mapping"
+
+    old_id = Column(COL_ID_STR, primary_key=True)
+    new_id = Column(COL_ID_STR, ForeignKey(UniversalComponent.id), nullable=False)
