@@ -29,7 +29,7 @@ def configure_logger(
 
 
 configure_logger(
-    "%s COBRAdb load_db.log" % time.strftime("%Y-%m-%d %H:%M:%S"), level=logging.DEBUG
+    "%s COBRAdb load_db.log" % time.strftime("%Y-%m-%d %H:%M:%S"), level=logging.WARNING
 )
 
 

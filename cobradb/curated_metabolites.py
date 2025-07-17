@@ -49,11 +49,19 @@ def push_metabolites(data, session):
     session.commit()
 
     for bid, bid_info in data["bigg_ids"].items():
+        if "##" in bid:
+            continue
         bigg_ids_handled = set()
         universal_component_db = UniversalComponent(
             id=bid,
         )
         session.add(universal_component_db)
+        session.commit()
+        for old_id, new_id in data["bigg_id_mapping"].items():
+            if new_id != bid:
+                continue
+            id_mapping_db = ComponentIDMapping(old_id=old_id, new_id=new_id)
+            session.add(id_mapping_db)
         for ch in bid_info["chebis"]:
             chebi_db = (
                 session.query(ReferenceCompound)
@@ -80,12 +88,12 @@ def push_metabolites(data, session):
                 )
                 session.add(component_db)
 
-                component_reference_db = ComponentReferenceMapping(
-                    component_id=full_bid,
-                    universal_id=bid,
-                    reference_id=ch,
-                )
-                session.add(component_reference_db)
+            component_reference_db = ComponentReferenceMapping(
+                component_id=full_bid,
+                universal_id=bid,
+                reference_id=ch,
+            )
+            session.add(component_reference_db)
     session.commit()
 
 

@@ -7,6 +7,9 @@ import time
 import sys
 from pathlib import Path
 import cProfile
+from pprint import pprint
+
+from cobradb.metabolites import create_metabolite
 
 
 def configure_logger(
@@ -213,6 +216,7 @@ def main():
         load_rhea(settings.rhea, session)
     if not args.skip_curated_metabolites:
         load_bigg_ids(settings.curated_metabolites, session)
+    pprint(create_metabolite("amet", "CHEBI:15414", session))
     if not args.skip_curated_reactions:
         load_reactions(settings.curated_reactions, session)
     # if not args.skip_models:

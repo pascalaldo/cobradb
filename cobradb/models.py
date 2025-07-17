@@ -209,24 +209,6 @@ class ComponentReferenceMapping(Base):
     reference_n = Column(Integer, nullable=True)
 
 
-class Reaction(Base):
-    __tablename__ = "reaction"
-
-    id = Column(COL_ID_STR, primary_key=True)
-    type = Column(String(20))
-    name = Column(String, nullable=True)
-    reaction_hash = Column(String, nullable=False)
-    pseudoreaction = Column(Boolean, default=False)
-
-    __mapper_args__ = {"polymorphic_identity": "reaction", "polymorphic_on": type}
-
-    def __repr__(self):
-        return "<cobradb Reaction(id=%d)>" % (
-            self.id,
-            ", pseudoreaction" if self.pseudoreaction else "",
-        )
-
-
 class DataSource(Base):
     __tablename__ = "data_source"
 
@@ -399,7 +381,7 @@ class ModelReaction(Base):
     __table_args__ = (UniqueConstraint("reaction_id", "model_id", "copy_number"),)
 
     def __repr__(self):
-        return "<cobradb ModelReaction(id={self.id}, reaction_id={self.reaction_id}, model_id={self.model_id}, copy_number={self.copy_number})>".format(
+        return "<cobradb ModelCeaction(id={self.id}, reaction_id={self.reaction_id}, model_id={self.model_id}, copy_number={self.copy_number})>".format(
             self=self
         )
 
@@ -427,12 +409,32 @@ class GeneReactionMatrix(Base):
         )
 
 
+class UniversalCompartmentalizedComponent(Base):
+    __tablename__ = "universal_compartmentalized_component"
+    id = Column(COL_ID_STR, primary_key=True)
+    universal_component_id = Column(
+        COL_ID_STR,
+        ForeignKey(UniversalComponent.id, onupdate="CASCADE", ondelete="CASCADE"),
+        nullable=False,
+    )
+    compartment_id = Column(
+        COL_ID_STR,
+        ForeignKey("compartment.id", onupdate="CASCADE", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+
 class CompartmentalizedComponent(Base):
     __tablename__ = "compartmentalized_component"
     id = Column(COL_ID_STR, primary_key=True)
     component_id = Column(
         COL_ID_STR,
         ForeignKey("component.id", onupdate="CASCADE", ondelete="CASCADE"),
+        nullable=False,
+    )
+    universal_id = Column(
+        COL_ID_STR,
+        ForeignKey(UniversalCompartmentalizedComponent.id),
         nullable=False,
     )
     compartment_id = Column(
@@ -468,24 +470,6 @@ class Compartment(Base):
 
     def __repr__(self):
         return "<cobradb Compartment(id={self.id})>".format(self=self)
-
-
-class ReactionMatrix(Base):
-    __tablename__ = "reaction_matrix"
-    id = Column(Integer, primary_key=True)
-    reaction_id = Column(COL_ID_STR, ForeignKey("reaction.id"), nullable=False)
-    compartmentalized_component_id = Column(
-        COL_ID_STR,
-        ForeignKey(
-            "compartmentalized_component.id", onupdate="CASCADE", ondelete="CASCADE"
-        ),
-        nullable=False,
-    )
-    stoichiometry = Column(Float)
-
-    __table_args__ = (
-        UniqueConstraint("reaction_id", "compartmentalized_component_id"),
-    )
 
 
 class EscherMap(Base):
@@ -584,13 +568,12 @@ class ReferenceReaction(Base):
     __tablename__ = "reference_reaction"
 
     id = Column(COL_ID_STR, primary_key=True)
+    name = Column(COL_NAME_STR, nullable=True)
     equation = Column(COL_EQUATION_STR, nullable=True)
 
     def __repr__(self):
         return (
-            "<cobradb ReferenceReaction(id={self.id}, "
-            "accession={self.accession}, "
-            "equation='{self.equation}'>"
+            "<cobradb ReferenceReaction(id={self.id}, " "equation='{self.equation}'>"
         ).format(self=self)
 
 
@@ -611,6 +594,43 @@ class ReferenceReactionParticipant(Base):
             f"compound_id={self.compound_id}, side={self.side}, "
             f"coefficient={self.coefficient}, compartment={self.compartment})"
         )
+
+
+class Reaction(Base):
+    __tablename__ = "reaction"
+
+    id = Column(COL_ID_STR, primary_key=True)
+    # type = Column(String(20))
+    name = Column(String, nullable=True)
+    reference_id = Column(COL_ID_STR, ForeignKey(ReferenceReaction.id), nullable=False)
+    # reaction_hash = Column(String, nullable=False)
+    # pseudoreaction = Column(Boolean, default=False)
+
+    # __mapper_args__ = {"polymorphic_identity": "reaction", "polymorphic_on": type}
+
+    def __repr__(self):
+        return "<cobradb Reaction(id=%d)>" % (
+            self.id,
+            ", pseudoreaction" if self.pseudoreaction else "",
+        )
+
+
+class ReactionMatrix(Base):
+    __tablename__ = "reaction_matrix"
+    id = Column(Integer, primary_key=True)
+    reaction_id = Column(COL_ID_STR, ForeignKey(Reaction.id), nullable=False)
+    compartmentalized_component_id = Column(
+        COL_ID_STR,
+        ForeignKey(
+            CompartmentalizedComponent.id, onupdate="CASCADE", ondelete="CASCADE"
+        ),
+        nullable=False,
+    )
+    coefficient = Column(Float)
+
+    __table_args__ = (
+        UniqueConstraint("reaction_id", "compartmentalized_component_id"),
+    )
 
 
 class ComponentIDMapping(Base):

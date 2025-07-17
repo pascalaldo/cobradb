@@ -14,6 +14,16 @@ import time
 
 from pprint import pprint
 import re
+from copy import deepcopy
+
+COMP_IN_OUT = [
+    ("c", "p"),
+    ("c", "e"),
+    ("p", "e"),
+    ("n", "c"),
+    ("n", "p"),
+    ("n", "e"),
+]
 
 
 def load_bigg_id_data(filename):
@@ -27,13 +37,15 @@ def match_reaction_data_with_db_entry(reaction_data, db_entry, session):
             ReferenceReactionParticipant,
             ReferenceCompound,
         )
-        .where(ReferenceReactionParticipant.reaction_id == db_entry.id)
         .join(
             ReferenceCompound,
             ReferenceCompound.id == ReferenceReactionParticipant.compound_id,
         )
+        .where(ReferenceReactionParticipant.reaction_id == db_entry.id)
     )
-    reaction_mapping = ({}, {})
+    # print(stmt)
+    # print(db_entry.id)
+    reaction_mappings = [({}, {}, reaction_data["parsed_participants"][:], [])]
     participants_db = session.execute(stmt)
     for (
         participant,
@@ -41,62 +53,103 @@ def match_reaction_data_with_db_entry(reaction_data, db_entry, session):
     ) in participants_db:
         print(f"Participant: {participant} -> {compound}")
         stmt = (
-            select(ComponentReferenceMapping, UniversalComponent, Component)
-            .where(
-                compound.id == ComponentReferenceMapping.reference_id,
+            select(
+                ComponentReferenceMapping,
+                UniversalComponent,
+                Component,
             )
             .join(
                 UniversalComponent,
                 UniversalComponent.id == ComponentReferenceMapping.universal_id,
             )
+            .where(
+                compound.id == ComponentReferenceMapping.reference_id,
+            )
             .join(Component, Component.id == ComponentReferenceMapping.component_id)
         )
-        participant_mapping = None
+        # print(stmt)
+        # print(compound.id)
+        participant_mappings = []
         crmappings_db = session.execute(stmt)
         for crmapping, universal_component, component in crmappings_db:
-            print(f" {crmapping}: {universal_component}, {component}")
-            m = [
+            print(f" {crmapping}: {universal_component}")
+            ms = [
                 p
                 for p in reaction_data["parsed_participants"]
                 if p[2] == universal_component.id
             ]
-            if not m:
+            if not ms:
                 continue
-            d_coef, d_side, d_universal_id, d_comp = m[0]
-            participant_mapping = (participant.side, d_side), (
-                participant.compartment,
-                d_comp,
-            )
-            break
-        if participant_mapping:
-            if (side_m := participant_mapping[0][0]) in reaction_mapping[0]:
-                if participant_mapping[0][1] != reaction_mapping[0][side_m]:
-                    print(
-                        f"Inconsistent mapping: prev: {side_m}:{reaction_mapping[0][side_m]}, new: {side_m}{participant_mapping[0][1]}"
-                    )
-                    return False
-            else:
-                reaction_mapping[0][participant_mapping[0][0]] = participant_mapping[0][
-                    1
-                ]
-            if (comp_m := participant_mapping[1][0]) in reaction_mapping[1]:
-                if participant_mapping[1][1] != reaction_mapping[1][comp_m]:
-                    print(
-                        f"Inconsistent mapping: prev: {comp_m}:{reaction_mapping[1][side_m]}, new: {comp_m}{participant_mapping[1][1]}"
-                    )
-                    return False
-            else:
-                reaction_mapping[1][participant_mapping[1][0]] = participant_mapping[1][
-                    1
-                ]
-    print(
-        f"Successful mapping: sides: {reaction_mapping[0]}, comp: {reaction_mapping[1]}"
-    )
+            for m in ms:
+                d_coef, d_side, d_universal_id, d_comp = m
+                participant_mappings.append(
+                    (
+                        (participant.side, d_side),
+                        (
+                            participant.compartment,
+                            d_comp,
+                        ),
+                        m,
+                        participant,
+                        component,
+                    ),
+                )
+        if participant_mappings:
+            old_front = reaction_mappings
+            reaction_mappings = []
+            for front in old_front:
+                for participant_mapping in participant_mappings:
+                    if participant_mapping[2] not in front[2]:
+                        continue
+                    new_item = deepcopy(front)
+                    for i, att in enumerate(["side", "comp"]):
+                        if new_item is None:
+                            break
+                        if (att_m := participant_mapping[i][0]) in front[i]:
+                            if participant_mapping[i][1] != front[i][att_m]:
+                                print(
+                                    f"Inconsistent {att} mapping: prev: {att_m}:{front[i][att_m]}, new: {att_m}{participant_mapping[i][1]}"
+                                )
+                                new_item = None
+                        elif participant_mapping[i][1] in front[i].values():
+                            print(
+                                f"Inconsistent {att} mapping: value:{participant_mapping[i][1]} already in {front[i]}"
+                            )
+                            new_item = None
+                        else:
+                            new_item[i][att_m] = participant_mapping[i][1]
+                    if new_item is not None:
+                        new_item[3].append(
+                            (participant_mapping[3], participant_mapping[4])
+                        )
+                        new_item[2].remove(participant_mapping[2])
+                        reaction_mappings.append(new_item)
+    successful_mappings = []
+    for m in reaction_mappings:
+        if m[2]:
+            continue
+        if "in" in m[1] and "out" in m[1]:
+            if not (m[1]["in"], m[1]["out"]) in COMP_IN_OUT:
+                print(
+                    f"mapping in: {m[1]['in']}, out: {m[1]['out']} not a known in/out pair."
+                )
+                continue
+        successful_mappings.append(m)
+    if not successful_mappings:
+        print(f"No successful mappings: {reaction_mappings}")
+        return None
+    elif len(successful_mappings) > 1:
+        print(f"Multiple successful mappings: {reaction_mappings}")
+        return None
+    else:
+        return successful_mappings[0]
 
 
 @timing
 def push_reactions(data, session):
-    for bigg_id, reaction_data in data.items():
+    for n, (bigg_id, reaction_data) in enumerate(data.items()):
+        # if bigg_id != "UPP3MT":
+        #     continue
         if reaction_data["rhea"]:
             print("###")
             print(f"{bigg_id}: {reaction_data['name']}")
@@ -106,6 +159,16 @@ def push_reactions(data, session):
             for i, side in enumerate("LR"):
                 for p in reaction_data["participants"][i]:
                     universal_id, compartment = p[1].rsplit("_", maxsplit=1)
+                    id_mapping_db = (
+                        session.query(ComponentIDMapping)
+                        .filter(ComponentIDMapping.old_id == universal_id)
+                        .first()
+                    )
+                    if id_mapping_db:
+                        print(
+                            f"Mapping: {id_mapping_db.old_id} -> {id_mapping_db.new_id}"
+                        )
+                        universal_id = id_mapping_db.new_id
                     parsed_participants.append((p[0], side, universal_id, compartment))
             reaction_data["parsed_participants"] = parsed_participants
 
@@ -121,76 +184,84 @@ def push_reactions(data, session):
             if not db_entries:
                 print("!No DB entry for RHEA")
             else:
+                mappings = []
                 for db_entry in db_entries:
                     print(f"$Ref: {db_entry.equation}")
-                    match_reaction_data_with_db_entry(reaction_data, db_entry, session)
-                    # return
-    # for ch, chebi_info in data["chebis"].items():
-    #     chebi_db = (
-    #         session.query(ReferenceCompound).filter(ReferenceCompound.id == ch).first()
-    #     )
-    #     if chebi_db:
-    #         print(f"Chebi {ch} already exists: ({chebi_info}) ({chebi_db})")
-    #         # if chebi_info["charge"] is not None and hasattr(chebi_db, "charge"):
-    #         #     if int(chebi_db.charge) != chebi_info["charge"]:
-    #         #         raise ValueError("Charge mismatch.")
-    #         #     else:
-    #         #         print("Matching charges")
-    #     else:
-    #         if chebi_info.get("formula"):
-    #             print(f"Creating new entry for {ch}")
-    #             chebi_db = ReferenceCompound(
-    #                 id=ch,
-    #                 name=chebi_info["name"],
-    #                 formula=chebi_info["formula"],
-    #                 charge=str(chebi_info.get("charge", 0)),
-    #                 compound_type="small_molecule",
-    #             )
-    #             session.add(chebi_db)
-    #         else:
-    #             print(f"Skipping {ch}, no formula")
-    # session.commit()
-    #
-    # for bid, bid_info in data["bigg_ids"].items():
-    #     bigg_ids_handled = set()
-    #     universal_component_db = UniversalComponent(
-    #         id=bid,
-    #     )
-    #     session.add(universal_component_db)
-    #     for ch in bid_info["chebis"]:
-    #         chebi_db = (
-    #             session.query(ReferenceCompound)
-    #             .filter(ReferenceCompound.id == ch)
-    #             .first()
-    #         )
-    #         if not chebi_db:
-    #             continue
-    #         if chebi_db.charge is None or chebi_db.formula is None:
-    #             continue
-    #         try:
-    #             charge_int = int(chebi_db.charge)
-    #         except:
-    #             continue
-    #         full_bid = f"{bid}:{charge_int}"
-    #         if full_bid not in bigg_ids_handled:
-    #             bigg_ids_handled.add(full_bid)
-    #             component_db = Component(
-    #                 id=full_bid,
-    #                 universal_id=bid,
-    #                 name=chebi_db.name,
-    #                 formula=chebi_db.formula,
-    #                 charge=charge_int,
-    #             )
-    #             session.add(component_db)
-    #
-    #             component_reference_db = ComponentReferenceMapping(
-    #                 component_id=full_bid,
-    #                 universal_id=bid,
-    #                 reference_id=ch,
-    #             )
-    #             session.add(component_reference_db)
-    # session.commit()
-    #
+                    m = match_reaction_data_with_db_entry(
+                        reaction_data, db_entry, session
+                    )
+                    if m is not None:
+                        mappings.append((db_entry, m))
+                if len(mappings) != 1:
+                    print(f"No single unique mapping.")
+                else:
+                    db_entry, m = mappings[0]
+
+                    reaction_db = (
+                        session.query(Reaction).filter(Reaction.id == bigg_id).first()
+                    )
+                    if reaction_db:
+                        print(f"Reaction {bigg_id} already exists.")
+                        continue
+                    reaction_db = Reaction(
+                        id=bigg_id, name=db_entry.name, reference_id=db_entry.id
+                    )
+                    session.add(reaction_db)
+
+                    for participant, compound in m[3]:
+                        compartment = m[1][participant.compartment]
+                        universal_id = f"{compound.universal_id}_{compartment}"
+                        comp_comp_id = f"{universal_id}:{compound.charge}"
+
+                        compartment_db = (
+                            session.query(Compartment)
+                            .filter(Compartment.id == compartment)
+                            .first()
+                        )
+                        if not compartment_db:
+                            compartment_db = Compartment(
+                                id=compartment, name=compartment
+                            )
+                            session.add(compartment_db)
+
+                        universal_compartmentalized_component_db = (
+                            session.query(UniversalCompartmentalizedComponent)
+                            .filter(
+                                UniversalCompartmentalizedComponent.id == universal_id
+                            )
+                            .first()
+                        )
+                        if not universal_compartmentalized_component_db:
+                            universal_compartmentalized_component_db = (
+                                UniversalCompartmentalizedComponent(
+                                    id=universal_id,
+                                    universal_component_id=compound.universal_id,
+                                    compartment_id=compartment_db.id,
+                                )
+                            )
+                            session.add(universal_compartmentalized_component_db)
+
+                        compartmentalized_component_db = (
+                            session.query(CompartmentalizedComponent)
+                            .filter(CompartmentalizedComponent.id == comp_comp_id)
+                            .first()
+                        )
+                        if not compartmentalized_component_db:
+                            compartmentalized_component_db = CompartmentalizedComponent(
+                                id=comp_comp_id,
+                                component_id=compound.id,
+                                universal_id=universal_compartmentalized_component_db.id,
+                                compartment_id=compartment_db.id,
+                            )
+                            session.add(compartmentalized_component_db)
+
+                        reaction_matrix_db = ReactionMatrix(
+                            reaction_id=reaction_db.id,
+                            compartmentalized_component_id=compartmentalized_component_db.id,
+                            coefficient=float(participant.coefficient),
+                        )
+                        session.add(reaction_matrix_db)
+        session.commit()
 
 
 @timing
