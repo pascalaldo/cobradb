@@ -213,7 +213,7 @@ class DataSource(Base):
     __tablename__ = "data_source"
 
     id = Column(Integer, primary_key=True)
-    bigg_id = Column(String, nullable=False)
+    bigg_id = Column(COL_ID_STR, nullable=False)
     name = Column(String(100))
     url_prefix = Column(String)
 
@@ -229,8 +229,8 @@ class DataSource(Base):
 class Synonym(Base):
     __tablename__ = "synonym"
     id = Column(Integer, primary_key=True)
-    ome_id = Column(Integer)
-    synonym = Column(String)
+    ome_id = Column(COL_ID_STR)
+    synonym = Column(COL_ID_STR)
     type = Column(custom_enums["synonym_type"])
     data_source_id = Column(Integer, ForeignKey("data_source.id", ondelete="CASCADE"))
 
@@ -310,8 +310,8 @@ class DeprecatedID(Base):
 
     id = Column(Integer, primary_key=True)
     type = Column(custom_enums["deprecated_id_types"])
-    deprecated_id = Column(String)
-    ome_id = Column(Integer)
+    deprecated_id = Column(COL_ID_STR)
+    ome_id = Column(COL_ID_STR)
 
     __table_args__ = (UniqueConstraint("type", "deprecated_id", "ome_id"),)
 
