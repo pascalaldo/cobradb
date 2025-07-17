@@ -5,6 +5,7 @@ from cobradb.models import (
     ComponentReferenceMapping,
     ReferenceCompound,
     UniversalComponent,
+    UniversalComponentReferenceMapping,
 )
 from libchebipy import ChebiEntity
 import re
@@ -159,12 +160,21 @@ def create_metabolite(proposed_bigg_id: str, input_chebi: str, session):
     for chebi, reference_db in references_db.items():
         full_bid = f"{proposed_bigg_id}:{reference_db.charge}"
         if full_bid not in full_bids_created:
+            charge = reference_db.charge
+            try:
+                int_charge = int(str(charge))
+            except:
+                continue
+            formula = reference_db.formula
+            if not formula or formula == "nan":
+                continue
+
             component_db = Component(
                 id=full_bid,
                 universal_id=universal_component_db.id,
                 name=reference_db.name,
-                formula=reference_db.formula,
-                charge=reference_db.charge,
+                formula=formula,
+                charge=int_charge,
             )
             session.add(component_db)
             full_bids_created[full_bid] = component_db
@@ -177,7 +187,24 @@ def create_metabolite(proposed_bigg_id: str, input_chebi: str, session):
         )
         session.add(component_ref_mapping_db)
 
+        if chebi == default_chebi:
+            universal_component_ref_mapping_db = (
+                session.query(UniversalComponentReferenceMapping)
+                .filter(UniversalComponentReferenceMapping.id == proposed_bigg_id)
+                .first()
+            )
+            if not universal_component_ref_mapping_db:
+                session.commit()
+                universal_component_ref_mapping_db = UniversalComponentReferenceMapping(
+                    id=proposed_bigg_id, mapping_id=component_ref_mapping_db.id
+                )
+                session.add(universal_component_ref_mapping_db)
+
         successfully_added.append((full_bid, reference_db.id))
+
+    if not full_bids_created:
+        session.commit()
+        session.delete(universal_component_db)
     session.commit()
 
     return {"status": "success", "components_added": successfully_added}

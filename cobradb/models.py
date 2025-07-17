@@ -209,6 +209,14 @@ class ComponentReferenceMapping(Base):
     reference_n = Column(Integer, nullable=True)
 
 
+class UniversalComponentReferenceMapping(Base):
+    __tablename__ = "univeral_component_reference_mapping"
+    id = Column(COL_ID_STR, ForeignKey(UniversalComponent.id), primary_key=True)
+    mapping_id = Column(
+        Integer, ForeignKey(ComponentReferenceMapping.id), nullable=False
+    )
+
+
 class DataSource(Base):
     __tablename__ = "data_source"
 
