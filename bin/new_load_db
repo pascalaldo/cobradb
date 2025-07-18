@@ -169,6 +169,7 @@ def main():
             if assembly_file.is_file():
                 assemblies[assembly] = str(assembly_file)
             else:
+                print(f"Assembly file not found: {assembly_file}")
                 assemblies[assembly] = None
         return r
 
