@@ -84,6 +84,9 @@ for data_pref in [
     "gene_reaction_rule_prefs",
     "data_source_preferences",
     "metabolite_duplicates",
+    "rhea",
+    "curated_metabolites",
+    "curated_reactions",
 ]:
     try:
         setattr(self, data_pref, expanduser(config.get("DATA", data_pref)))

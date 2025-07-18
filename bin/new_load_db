@@ -7,6 +7,10 @@ import time
 import sys
 from pathlib import Path
 import cProfile
+from pprint import pprint
+
+from cobradb.component_loading import load_assembly
+from cobradb.metabolites import create_metabolite
 
 
 def configure_logger(
@@ -33,18 +37,15 @@ configure_logger(
 )
 
 
+from cobradb.curated_reactions import load_reactions
 from cobradb.models import *
 from cobradb import settings, util
-from cobradb.component_loading import get_genbank_accessions, load_assembly
+from cobradb.rhea import load_rhea
+from cobradb.curated_metabolites import load_bigg_ids
 from cobradb.model_loading import load_model
-from cobradb.map_loading import load_maps_from_server
 from cobradb.version_loading import load_version_date
 
-import os
-from os import listdir
-from os.path import join, isfile
 import argparse
-from collections import defaultdict
 
 
 parser = argparse.ArgumentParser()
@@ -60,6 +61,17 @@ parser.add_argument("--drop-maps", help="Empty map data", action="store_true")
 parser.add_argument("--skip-genomes", help="Skip genome loading", action="store_true")
 parser.add_argument("--skip-models", help="Skip model loading", action="store_true")
 parser.add_argument("--skip-maps", help="Skip map loading", action="store_true")
+parser.add_argument("--skip-rhea", help="Skip RHEA loading", action="store_true")
+parser.add_argument(
+    "--skip-curated-metabolites",
+    help="Skip curated metabolites loading",
+    action="store_true",
+)
+parser.add_argument(
+    "--skip-curated-reactions",
+    help="Skip curated reactions loading",
+    action="store_true",
+)
 
 args = parser.parse_args()
 
@@ -138,14 +150,6 @@ def main():
     lines = util.load_tsv(model_genome_path, required_column_num=None)
     models_list = []
 
-    def _check_for_additional_gb_filenames(ref_string_plus):
-        """Get the extra genbank files from a genome reference."""
-        spl = [x.strip() for x in ref_string_plus.split(",")]
-        if len(spl) == 1:
-            return spl[0], None
-        else:
-            return spl[0], spl[1:]
-
     assemblies = {}
 
     def get_assembly_filenames(assembly_string):
@@ -165,11 +169,10 @@ def main():
             if assembly_file.is_file():
                 assemblies[assembly] = str(assembly_file)
             else:
+                print(f"Assembly file not found: {assembly_file}")
                 assemblies[assembly] = None
         return r
 
-    f_start_time = time.time()
-    # parse the model_genome file
     chromosomes = {}
     for line in lines:
         if len(line) > 4:
@@ -210,7 +213,6 @@ def main():
                 ),
             }
         )
-    timings["parse_model_genome"] = time.time() - f_start_time
 
     # load the genome
     genomes_for_models = {}
@@ -232,12 +234,22 @@ def main():
                 logging.exception(e)
         timings["load_assemblies"] = time.time() - f_start_time
 
+    if not args.skip_rhea:
+        load_rhea(settings.rhea, session)
+    if not args.skip_curated_metabolites:
+        load_bigg_ids(settings.curated_metabolites, session)
+    pprint(create_metabolite("amet", "CHEBI:15414", session))
+    if not args.skip_curated_reactions:
+        load_reactions(settings.curated_reactions, session)
     if not args.skip_models:
         f_start_time = time.time()
         logging.info("Loading models")
         n = len(models_list)
-        model_dir = settings.model_directory
+        model_dir = Path(settings.model_directory)
         for i, model_dict in enumerate(models_list):
+            # if model_dict["model_filename"] != "iML1515.json":
+            #     continue
+            print(model_dict)
             logging.info(
                 "Loading model ({} of {}) {}".format(
                     i + 1, n, model_dict["model_filename"]
@@ -245,7 +257,7 @@ def main():
             )
             try:
                 load_model(
-                    join(model_dir, model_dict["model_filename"]),
+                    model_dir / model_dict["model_filename"],
                     model_dict["pub_ref"],
                     model_dict["genome_ref"],
                     session,
@@ -254,17 +266,11 @@ def main():
                 logging.info(str(e))
             except Exception as e:
                 print(
-                    f"model_dir: '{model_dir}', model_path: '{join(model_dir, model_dict['model_filename'])}'"
+                    f"model_dir: '{model_dir}', model_path: '{model_dir / model_dict['model_filename']}'"
                 )
                 logging.error("Could not load model %s." % model_dict["model_filename"])
                 logging.exception(e)
         timings["load_models"] = time.time() - f_start_time
-
-    if not args.skip_maps:
-        f_start_time = time.time()
-        logging.info("Loading Escher maps")
-        load_maps_from_server(session, drop_maps=(args.drop_models or args.drop_maps))
-        timings["load_maps"] = time.time() - f_start_time
 
     timings["total"] = time.time() - start_time
     logging.debug(str(timings))
@@ -273,5 +279,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    cProfile.run("main()")
+    main()
+    # cProfile.run("main()")
