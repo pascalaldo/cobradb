@@ -62,7 +62,7 @@ def improve_name(session, db, new_name):
 
     """
     cur_name = db.name
-    cur_id = db.bigg_id
+    cur_id = db.id
     # New name is not None and not similar to bigg_id
     if (
         new_name is not None
@@ -103,42 +103,39 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
     model_bigg_id = model.id
 
     # check that the model doesn't already exist
-    if session.query(Model).filter_by(bigg_id=model_bigg_id).count() > 0:
+    if session.query(Model).filter_by(id=model_bigg_id).count() > 0:
         raise AlreadyLoadedError("Model %s already loaded" % model_bigg_id)
 
     # check for a genome annotation for this model
-    # if genome_ref is not None and genome_ref[0] == "organism":
-    #     genome_id = None
-    #     organism = genome_ref[1]
-    # elif genome_ref is not None and genome_ref[0] in [
-    #     "ncbi_accession",
-    #     "ncbi_assembly",
-    # ]:
-    #     genome_db = (
-    #         session.query(Genome)
-    #         .filter(Genome.accession_type == genome_ref[0])
-    #         .filter(Genome.accession_value == genome_ref[1])
-    #         .first()
-    #     )
-    #     if genome_db is None:
-    #         raise GenbankNotFound(
-    #             "Genome for model {} not found with genome_ref {}".format(
-    #                 model_bigg_id, genome_ref
-    #             )
-    #         )
-    #     genome_id = genome_db.id
-    #     organism = genome_db.organism
-    # else:
-    #     logging.info(
-    #         "No Genome reference or organism provided for model {}".format(
-    #             model_bigg_id
-    #         )
-    #     )
-    #     genome_id = None
-    #     organism = None
-    #
-    genome_id = None
-    organism = None
+    if genome_ref is not None and genome_ref[0] == "organism":
+        genome_id = None
+        organism = genome_ref[1]
+    elif genome_ref is not None and genome_ref[0] in [
+        "ncbi_accession",
+        "ncbi_assembly",
+    ]:
+        genome_db = (
+            session.query(Genome)
+            .filter(Genome.accession_type == genome_ref[0])
+            .filter(Genome.accession_value == genome_ref[1])
+            .first()
+        )
+        if genome_db is None:
+            raise GenbankNotFound(
+                "Genome for model {} not found with genome_ref {}".format(
+                    model_bigg_id, genome_ref
+                )
+            )
+        genome_id = genome_db.id
+        organism = genome_db.organism
+    else:
+        logging.info(
+            "No Genome reference or organism provided for model {}".format(
+                model_bigg_id
+            )
+        )
+        genome_id = None
+        organism = None
 
     # Load the model objects. Remember: ORDER MATTERS! So don't mess around.
     logging.debug("Loading objects for model {}".format(model.id))
@@ -161,13 +158,13 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
     else:
         logging.warning("No compartment names file")
         compartment_names = {}
-    comp_comp_db_ids, final_metabolite_ids = load_metabolites(
-        session,
-        model_database_id,
-        model,
-        compartment_names,
-        old_parsed_ids["metabolites"],
-    )
+    # comp_comp_db_ids, final_metabolite_ids = load_metabolites(
+    #     session,
+    #     model_database_id,
+    #     model,
+    #     compartment_names,
+    #     old_parsed_ids["metabolites"],
+    # )
 
     # # reactions
     # model_db_rxn_ids = load_reactions(
@@ -179,14 +176,15 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
     #     final_metabolite_ids,
     # )
     #
-    # # genes
-    # load_genes(
-    #     session, model_database_id, model, model_db_rxn_ids, old_parsed_ids["genes"]
-    # )
-    #
-    # # count model objects for the model summary web page
-    # load_model_count(session, model_database_id)
-    #
+    # genes
+    model_db_rxn_ids = {}
+    load_genes(
+        session, model_database_id, model, model_db_rxn_ids, old_parsed_ids["genes"]
+    )
+
+    # count model objects for the model summary web page
+    load_model_count(session, model_database_id)
+
     session.commit()
 
     return model_bigg_id
@@ -222,7 +220,7 @@ def load_new_model(session, model, genome_db_id, pub_ref, published_filename, or
 
     """
     model_db = Model(
-        bigg_id=model.id,
+        id=model.id,
         genome_id=genome_db_id,
         published_filename=published_filename,
         organism=organism,
@@ -367,14 +365,14 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
 
         # If there is no metabolite, add a new one.
         metabolite_db = (
-            session.query(Component).filter(Component.bigg_id == new_bigg_id).first()
+            session.query(Component).filter(Component.id == new_bigg_id).first()
         )
 
         # if necessary, add the new metabolite, and keep track of the ID
         new_name = scrub_name(getattr(metabolite, "name", None))
         if metabolite_db is None:
             # make the new metabolite
-            metabolite_db = Component(bigg_id=new_bigg_id, name=new_name)
+            metabolite_db = Component(id=new_bigg_id, name=new_name)
             session.add(metabolite_db)
             # session.commit()
         else:
@@ -398,7 +396,7 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
             ctx["component_bigg_id"],
             ctx["compartment_bigg_id"],
         )
-        if metabolite_db.bigg_id != component_bigg_id:
+        if metabolite_db.id != component_bigg_id:
             get_or_create(
                 session,
                 DeprecatedID,
@@ -411,7 +409,7 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
         # if there is no compartment, add a new one
         compartment_db = (
             session.query(Compartment)
-            .filter(Compartment.bigg_id == compartment_bigg_id)
+            .filter(Compartment.id == compartment_bigg_id)
             .first()
         )
         if compartment_db is None:
@@ -422,7 +420,7 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
                     "No name found for compartment %s" % compartment_bigg_id
                 )
                 name = ""
-            compartment_db = Compartment(bigg_id=compartment_bigg_id, name=name)
+            compartment_db = Compartment(id=compartment_bigg_id, name=name)
             session.add(compartment_db)
             # session.commit()
         ctx["compartment_db"] = compartment_db
@@ -605,7 +603,7 @@ def _new_reaction(
     # name is optional in cobra 0.4b2. This will probably change back.
     name = check_none(getattr(reaction, "name", None))
     reaction_db = Reaction(
-        bigg_id=bigg_id,
+        id=bigg_id,
         name=scrub_name(name),
         reaction_hash=reaction_hash,
         pseudoreaction=is_pseudoreaction,
@@ -655,7 +653,7 @@ def _new_reaction_add_metabolites(
         else:
             logging.debug(
                 "ReactionMatrix row already present for model {!s} metabolite {!s} reaction {!s}".format(
-                    model.id, metabolite.id, reaction_db.bigg_id
+                    model.id, metabolite.id, reaction_db.id
                 )
             )
 
@@ -755,9 +753,7 @@ def load_reactions(
         reaction_id = parse.remove_duplicate_tag(reaction.id)
 
         # Get the reaction
-        reaction_db = (
-            session.query(Reaction).filter(Reaction.bigg_id == reaction_id).first()
-        )
+        reaction_db = session.query(Reaction).filter(Reaction.id == reaction_id).first()
 
         # check for pseudoreaction
         is_pseudoreaction = check_pseudoreaction(reaction_id)
@@ -803,7 +799,7 @@ def load_reactions(
             while True:
                 # Check for existing and deprecated reaction ids
                 if session.query(Reaction).filter(
-                    Reaction.bigg_id == new_id
+                    Reaction.id == new_id
                 ).first() is None and not _is_deprecated_reaction_id(session, new_id):
                     return new_id
                 new_id = increment_id(new_id)
@@ -820,16 +816,14 @@ def load_reactions(
         if preferred_id is not None:
             logging.info("CP 2.1")
             # if the reaction already matches, just continue
-            if hash_db is not None and hash_db.bigg_id == preferred_id:
+            if hash_db is not None and hash_db.id == preferred_id:
                 reaction_db = hash_db
             # otherwise, make the new reaction
             else:
                 # if existing reactions match the preferred reaction find a new,
                 # incremented id for the existing match
                 preferred_id_db = (
-                    session.query(Reaction)
-                    .filter(Reaction.bigg_id == preferred_id)
-                    .first()
+                    session.query(Reaction).filter(Reaction.id == preferred_id).first()
                 )
                 if preferred_id_db is not None:
                     new_id = _find_new_incremented_id(session, preferred_id)
@@ -838,7 +832,7 @@ def load_reactions(
                             preferred_id, new_id, preferred_id, model.id
                         )
                     )
-                    preferred_id_db.bigg_id = new_id
+                    preferred_id_db.id = new_id
                     session.commit()
 
                 # make a new reaction for the preferred_id
@@ -915,7 +909,7 @@ def load_reactions(
             is_reversed = True
             logging.info(
                 "Matched {} to {} based on reverse hash".format(
-                    reaction_id, reverse_hash_db.bigg_id
+                    reaction_id, reverse_hash_db.id
                 )
             )
 
@@ -958,7 +952,7 @@ def load_reactions(
             improve_name(session, reaction_db, new_name)
 
         # Add reaction to deprecated ID list if necessary
-        if reaction_db.bigg_id != reaction_id:
+        if reaction_db.id != reaction_id:
             get_or_create(
                 session,
                 DeprecatedID,
@@ -1233,7 +1227,7 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
     )
     chromosome_ids = [c.id for c in chromosome_ids]
     if len(chromosome_ids) == 0:
-        logging.warning("No chromosomes for model %s" % model_db.bigg_id)
+        logging.warning("No chromosomes for model %s" % model_db.id)
 
     context = {}
 
@@ -1242,6 +1236,8 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
     for reaction in model.reactions:
         # find the ModelReaction that corresponds to this particular reaction in
         # the model
+        if reaction.id not in model_db_rxn_ids:
+            continue
         model_reaction_db = session.query(ModelReaction).get(
             model_db_rxn_ids[reaction.id]
         )
@@ -1265,10 +1261,10 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
             fns = [
                 _by_bigg_id,
                 _by_name,
-                _by_synonym,
-                _by_alternative_transcript,
-                _by_alternative_transcript_name,
-                _by_alternative_transcript_synonym,
+                # _by_synonym,
+                # _by_alternative_transcript,
+                # _by_alternative_transcript_name,
+                # _by_alternative_transcript_synonym,
                 _by_bigg_id_no_underscore,
             ]
             gene_db, is_alternative_transcript = _match_gene_by_fns(
@@ -1302,7 +1298,7 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
             # duplicate gene for the alternative transcript
             old_gene_db = gene_db
             ome_gene = {}
-            ome_gene["bigg_id"] = gene.id
+            ome_gene["bigg_id"] = gene.bigg_id
             ome_gene["name"] = old_gene_db.name
             ome_gene["leftpos"] = old_gene_db.leftpos
             ome_gene["rightpos"] = old_gene_db.rightpos
@@ -1324,21 +1320,21 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
             ctx["dup_gene_alternative_transcript"],
         )
 
-        if dup_gene_alternative_transcript:
-            # duplicate all the synonyms
-            synonyms_db = (
-                session.query(Synonym).filter(Synonym.ome_id == old_gene_db.id).all()
-            )
-            for syn_db in synonyms_db:
-                # add a new synonym
-                ome_synonym = {}
-                ome_synonym["type"] = syn_db.type
-                ome_synonym["ome_id"] = gene_db.id
-                ome_synonym["synonym"] = syn_db.synonym
-                ome_synonym["data_source_id"] = syn_db.data_source_id
-                synonym_object = Synonym(**ome_synonym)
-                session.add(synonym_object)
-
+        # if dup_gene_alternative_transcript:
+        #     # duplicate all the synonyms
+        #     synonyms_db = (
+        #         session.query(Synonym).filter(Synonym.ome_id == old_gene_db.id).all()
+        #     )
+        #     for syn_db in synonyms_db:
+        #         # add a new synonym
+        #         ome_synonym = {}
+        #         ome_synonym["type"] = syn_db.type
+        #         ome_synonym["ome_id"] = gene_db.id
+        #         ome_synonym["synonym"] = syn_db.synonym
+        #         ome_synonym["data_source_id"] = syn_db.data_source_id
+        #         synonym_object = Synonym(**ome_synonym)
+        #         session.add(synonym_object)
+        #
         # add model gene
         model_gene_db = (
             session.query(ModelGene)
@@ -1357,25 +1353,25 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
         gene_db, model_gene_db = ctx["gene_db"], ctx["model_gene_db"]
         # add old gene synonym
         old_bigg_synonyms = {}
-        for old_bigg_id in old_gene_ids[gene_id]:
-            synonym_db = (
-                session.query(Synonym)
-                .filter(Synonym.type == "gene")
-                .filter(Synonym.ome_id == gene_db.id)
-                .filter(Synonym.synonym == old_bigg_id)
-                .filter(Synonym.data_source_id == data_source_id)
-                .first()
-            )
-            if synonym_db is None:
-                synonym_db = Synonym(
-                    type="gene",
-                    ome_id=gene_db.id,
-                    synonym=old_bigg_id,
-                    data_source_id=data_source_id,
-                )
-                session.add(synonym_db)
-                # session.commit()
-            old_bigg_synonyms[old_bigg_id] = synonym_db
+        # for old_bigg_id in old_gene_ids[gene_id]:
+        #     synonym_db = (
+        #         session.query(Synonym)
+        #         .filter(Synonym.type == "gene")
+        #         .filter(Synonym.ome_id == gene_db.id)
+        #         .filter(Synonym.synonym == old_bigg_id)
+        #         .filter(Synonym.data_source_id == data_source_id)
+        #         .first()
+        #     )
+        #     if synonym_db is None:
+        #         synonym_db = Synonym(
+        #             type="gene",
+        #             ome_id=gene_db.id,
+        #             synonym=old_bigg_id,
+        #             data_source_id=data_source_id,
+        #         )
+        #         session.add(synonym_db)
+        #         # session.commit()
+        #     old_bigg_synonyms[old_bigg_id] = synonym_db
         ctx["old_bigg_synonyms"] = old_bigg_synonyms
     session.commit()
     for gene_id, ctx in context.items():
@@ -1384,21 +1380,21 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
             ctx["model_gene_db"],
             ctx["old_bigg_synonyms"],
         )
-        for old_bigg_id, synonym_db in old_bigg_synonyms.items():
-            # add OldIDSynonym
-            old_id_db = (
-                session.query(OldIDSynonym)
-                .filter(OldIDSynonym.type == "model_gene")
-                .filter(OldIDSynonym.ome_id == model_gene_db.id)
-                .filter(OldIDSynonym.synonym_id == synonym_db.id)
-                .first()
-            )
-            if old_id_db is None:
-                old_id_db = OldIDSynonym(
-                    type="model_gene", ome_id=model_gene_db.id, synonym_id=synonym_db.id
-                )
-                session.add(old_id_db)
-                # session.commit()
+        # for old_bigg_id, synonym_db in old_bigg_synonyms.items():
+        #     # add OldIDSynonym
+        #     old_id_db = (
+        #         session.query(OldIDSynonym)
+        #         .filter(OldIDSynonym.type == "model_gene")
+        #         .filter(OldIDSynonym.ome_id == model_gene_db.id)
+        #         .filter(OldIDSynonym.synonym_id == synonym_db.id)
+        #         .first()
+        #     )
+        #     if old_id_db is None:
+        #         old_id_db = OldIDSynonym(
+        #             type="model_gene", ome_id=model_gene_db.id, synonym_id=synonym_db.id
+        #         )
+        #         session.add(old_id_db)
+        #         # session.commit()
 
         # find model reaction
         try:
@@ -1423,11 +1419,9 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
                 session.add(new_object)
 
             # update the gene_reaction_rule if the gene id has changed
-            if gene_id != gene_db.bigg_id:
+            if gene_id != gene_db.id:
                 mr = session.query(ModelReaction).get(mr_db_id)
-                new_rule = _replace_gene_str(
-                    mr.gene_reaction_rule, gene_id, gene_db.bigg_id
-                )
+                new_rule = _replace_gene_str(mr.gene_reaction_rule, gene_id, gene_db.id)
                 (
                     session.query(ModelReaction)
                     .filter(ModelReaction.id == mr_db_id)

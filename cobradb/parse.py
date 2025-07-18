@@ -15,7 +15,7 @@ import six
 
 
 def _hash_fn(s):
-    to_hash = s if isinstance(s, six.binary_type) else s.encode('utf8')
+    to_hash = s if isinstance(s, six.binary_type) else s.encode("utf8")
     # python 2: md5(bytes).hexdigest() => Py2 bytes str
     # python 3: md5(bytes).hexdigest() => Py3 unicode str
     return hashlib.md5(to_hash).hexdigest()
@@ -31,9 +31,10 @@ def hash_metabolite_dictionary(met_dict, string_only):
     string_only: If True, return the string that would be hashed.
 
     """
-    sorted_mets = sorted([(m, v) for m, v in six.iteritems(met_dict)],
-                         key=lambda x: x[0])
-    sorted_mets_str = ''.join(['%s%.3f' % t for t in sorted_mets])
+    sorted_mets = sorted(
+        [(m, v) for m, v in six.iteritems(met_dict)], key=lambda x: x[0]
+    )
+    sorted_mets_str = "".join(["%s%.3f" % t for t in sorted_mets])
     if string_only:
         return sorted_mets_str
     else:
@@ -51,23 +52,27 @@ def hash_reaction(reaction, metabolite_dict, string_only=False, reverse=False):
     string_only: If True, return the string that would be hashed.
 
     """
-    the_dict = {metabolite_dict[m.id]: (-v if reverse else v)
-                for m, v in six.iteritems(reaction.metabolites)}
+    the_dict = {
+        metabolite_dict[m.id]: (-v if reverse else v)
+        for m, v in six.iteritems(reaction.metabolites)
+    }
     return hash_metabolite_dictionary(the_dict, string_only)
 
 
 def load_and_normalize(model_filepath):
     """Load a model, and give it a particular id style"""
 
+    model_filepath = str(model_filepath)
+
     # load the model
-    if model_filepath.endswith('.xml'):
+    if model_filepath.endswith(".xml"):
         model = cobra.io.read_sbml_model(model_filepath)
-    elif model_filepath.endswith('.mat'):
+    elif model_filepath.endswith(".mat"):
         model = cobra.io.load_matlab_model(model_filepath)
-    elif model_filepath.endswith('.json'):
+    elif model_filepath.endswith(".json"):
         model = cobra.io.load_json_model(model_filepath)
     else:
-       raise Exception('The %s file is not a valid filetype', model_filepath)
+        raise Exception("The %s file is not a valid filetype", model_filepath)
     # convert the ids
     model, old_ids = convert_ids(model)
 
@@ -108,9 +113,11 @@ def remove_boundary_metabolites(model):
                 break
     model.metabolites._generate_index()
 
-#-----------------
+
+# -----------------
 # Pseudoreactions
-#-----------------
+# -----------------
+
 
 class ConflictingPseudoreaction(Exception):
     pass
@@ -118,8 +125,8 @@ class ConflictingPseudoreaction(Exception):
 
 def _has_gene_reaction_rule(reaction):
     """Check if the reaction has a gene reaction rule."""
-    rule = getattr(reaction, 'gene_reaction_rule', None)
-    return rule is not None and rule.strip() != ''
+    rule = getattr(reaction, "gene_reaction_rule", None)
+    return rule is not None and rule.strip() != ""
 
 
 def _reaction_single_met_coeff(reaction):
@@ -130,9 +137,13 @@ def _reaction_single_met_coeff(reaction):
 
 def _reverse_reaction(reaction):
     """Reverse the metabolite coefficients and the upper & lower bounds."""
-    reaction.add_metabolites({k: -v for k, v in six.iteritems(reaction.metabolites)},
-                             combine=False)
-    reaction.upper_bound, reaction.lower_bound = -reaction.lower_bound, -reaction.upper_bound
+    reaction.add_metabolites(
+        {k: -v for k, v in six.iteritems(reaction.metabolites)}, combine=False
+    )
+    reaction.upper_bound, reaction.lower_bound = (
+        -reaction.lower_bound,
+        -reaction.upper_bound,
+    )
 
 
 def _fix_exchange(reaction):
@@ -142,26 +153,30 @@ def _fix_exchange(reaction):
     if met_coeff is None:
         return None
     met, coeff = met_coeff
-    if split_compartment(remove_duplicate_tag(met.id))[1] != 'e':
+    if split_compartment(remove_duplicate_tag(met.id))[1] != "e":
         return None
     # check id
-    if not re.search(r'^ex_', reaction.id, re.IGNORECASE):
-        logging.warning('Reaction {r.id} looks like an exchange but it does not start with EX_. Renaming'
-                     .format(r=reaction))
+    if not re.search(r"^ex_", reaction.id, re.IGNORECASE):
+        logging.warning(
+            "Reaction {r.id} looks like an exchange but it does not start with EX_. Renaming".format(
+                r=reaction
+            )
+        )
     # check coefficient
     if abs(coeff) != 1:
-        raise ConflictingPseudoreaction('Reaction {} looks like an exchange '
-                                        'but it has a reactant with coefficient {}'
-                                        .format(reaction.id, coeff))
+        raise ConflictingPseudoreaction(
+            "Reaction {} looks like an exchange "
+            "but it has a reactant with coefficient {}".format(reaction.id, coeff)
+        )
     # reverse if necessary
     if coeff == 1:
         _reverse_reaction(reaction)
-        logging.debug('Reversing pseudoreaction %s' % reaction.id)
-    return 'EX_%s' % met.id, 'Extracellular exchange'
+        logging.debug("Reversing pseudoreaction %s" % reaction.id)
+    return "EX_%s" % met.id, "Extracellular exchange"
 
 
 # for sink & demand functions
-_sink_regex = re.compile(r'^(sink|sk)_', re.IGNORECASE)
+_sink_regex = re.compile(r"^(sink|sk)_", re.IGNORECASE)
 
 
 def _fix_demand(reaction):
@@ -171,30 +186,35 @@ def _fix_demand(reaction):
     if met_coeff is None:
         return None
     met, coeff = met_coeff
-    if split_compartment(met.id)[1] == 'e':
+    if split_compartment(met.id)[1] == "e":
         return None
     # source bound should be 0
-    if ((coeff > 0 and reaction.upper_bound != 0) or
-        (coeff < 0 and reaction.lower_bound != 0)):
+    if (coeff > 0 and reaction.upper_bound != 0) or (
+        coeff < 0 and reaction.lower_bound != 0
+    ):
         return None
     # if it could be a demand, but it is named sink_ or SK_, then let it be a
     # sink (by returning None) because sink is really a superset of demand
     if _sink_regex.search(reaction.id):
         return None
     # check id
-    if not re.search(r'^dm_', reaction.id, re.IGNORECASE):
-        logging.warning('Reaction {r.id} looks like a demand but it does not start with DM_. Renaming.'
-                     .format(r=reaction))
+    if not re.search(r"^dm_", reaction.id, re.IGNORECASE):
+        logging.warning(
+            "Reaction {r.id} looks like a demand but it does not start with DM_. Renaming.".format(
+                r=reaction
+            )
+        )
     # check coefficient
     if abs(coeff) != 1:
-        raise ConflictingPseudoreaction('Reaction {} looks like a demand '
-                                        'but it has a reactant with coefficient {}'
-                                        .format(reaction.id, coeff))
+        raise ConflictingPseudoreaction(
+            "Reaction {} looks like a demand "
+            "but it has a reactant with coefficient {}".format(reaction.id, coeff)
+        )
     # reverse if necessary
     if coeff == 1:
         _reverse_reaction(reaction)
-        logging.debug('Reversing pseudoreaction %s' % reaction.id)
-    return 'DM_%s' % met.id, 'Intracellular demand'
+        logging.debug("Reversing pseudoreaction %s" % reaction.id)
+    return "DM_%s" % met.id, "Intracellular demand"
 
 
 def _fix_sink(reaction):
@@ -204,45 +224,49 @@ def _fix_sink(reaction):
     if met_coeff is None:
         return None
     met, coeff = met_coeff
-    if split_compartment(met.id)[1] == 'e':
+    if split_compartment(met.id)[1] == "e":
         return None
     # check id
     if not _sink_regex.search(reaction.id):
-        logging.warning('Reaction {r.id} looks like a sink but it does not start with sink_ or SK_. Renaming.'
-                     .format(r=reaction))
+        logging.warning(
+            "Reaction {r.id} looks like a sink but it does not start with sink_ or SK_. Renaming.".format(
+                r=reaction
+            )
+        )
     # check coefficient
     if abs(coeff) != 1:
-        raise ConflictingPseudoreaction('Reaction {} looks like a sink '
-                                        'but it has a reactant with coefficient {}'
-                                        .format(reaction.id, coeff))
+        raise ConflictingPseudoreaction(
+            "Reaction {} looks like a sink "
+            "but it has a reactant with coefficient {}".format(reaction.id, coeff)
+        )
     # reverse if necessary
     if coeff == 1:
         _reverse_reaction(reaction)
-        logging.debug('Reversing pseudoreaction %s' % reaction.id)
-    return 'SK_%s' % met.id, 'Intracellular source/sink'
+        logging.debug("Reversing pseudoreaction %s" % reaction.id)
+    return "SK_%s" % met.id, "Intracellular source/sink"
 
 
 def _fix_biomass(reaction):
     """Returns new ID if the reaction was treated as a biomass."""
     # does it look like an exchange?
-    regex = re.compile(r'biomass', re.IGNORECASE)
+    regex = re.compile(r"biomass", re.IGNORECASE)
     if not regex.search(reaction.id):
         return None
-    new_id = ('BIOMASS_%s' % regex.sub('', reaction.id)).replace('__', '_')
-    return new_id, 'Biomass and maintenance functions'
+    new_id = ("BIOMASS_%s" % regex.sub("", reaction.id)).replace("__", "_")
+    return new_id, "Biomass and maintenance functions"
 
 
 def _fix_atpm(reaction):
     """Returns new ID if the reaction was treated as a biomass."""
     # does it look like a atpm?
     mets = {k.id: v for k, v in six.iteritems(reaction.metabolites)}
-    subsystem = 'Biomass and maintenance functions'
-    if mets == {'atp_c': -1, 'h2o_c': -1, 'pi_c': 1, 'h_c': 1, 'adp_c': 1}:
-        return 'ATPM', subsystem
-    elif mets == {'atp_c': 1, 'h2o_c': 1, 'pi_c': -1, 'h_c': -1, 'adp_c': -1}:
+    subsystem = "Biomass and maintenance functions"
+    if mets == {"atp_c": -1, "h2o_c": -1, "pi_c": 1, "h_c": 1, "adp_c": 1}:
+        return "ATPM", subsystem
+    elif mets == {"atp_c": 1, "h2o_c": 1, "pi_c": -1, "h_c": -1, "adp_c": -1}:
         _reverse_reaction(reaction)
-        logging.debug('Reversing pseudoreaction %s' % reaction.id)
-        return 'ATPM', subsystem
+        logging.debug("Reversing pseudoreaction %s" % reaction.id)
+        return "ATPM", subsystem
     return None
 
 
@@ -250,7 +274,8 @@ def _normalize_pseudoreaction(new_style_id, reaction):
     """If the reaction is a pseudoreaction (exchange, demand, sink, biomass, or
     ATPM), then apply standard rules to it."""
 
-    pseudo_id = None; subsystem = None
+    pseudo_id = None
+    subsystem = None
 
     # check atpm separately because there is a good reason for an atpm-like
     # reaction with a gene_reaction_rule
@@ -278,22 +303,26 @@ def _normalize_pseudoreaction(new_style_id, reaction):
         if _has_gene_reaction_rule(reaction):
             if is_atpm:
                 return
-            raise ConflictingPseudoreaction('Reaction {r.id} looks like a pseudoreaction '
-                                            'but it has a gene_reaction_rule: '
-                                            '{r.gene_reaction_rule}'.format(r=reaction))
+            raise ConflictingPseudoreaction(
+                "Reaction {r.id} looks like a pseudoreaction "
+                "but it has a gene_reaction_rule: "
+                "{r.gene_reaction_rule}".format(r=reaction)
+            )
 
     return pseudo_id
 
 
-#----------
+# ----------
 # ID fixes
-#----------
+# ----------
+
 
 def remove_duplicate_tag(the_id):
-    return re.sub(r'\$\$DROP.*', '', the_id)
+    return re.sub(r"\$\$DROP.*", "", the_id)
+
 
 def add_duplicate_tag(the_id):
-    return '%s$$DROP' % the_id
+    return "%s$$DROP" % the_id
 
 
 def convert_ids(model):
@@ -313,8 +342,9 @@ def convert_ids(model):
 
     # fix metabolites
     for metabolite in model.metabolites:
-        new_id = id_for_new_id_style(fix_legacy_id(metabolite.id, use_hyphens=False),
-                                     is_metabolite=True)
+        new_id = id_for_new_id_style(
+            fix_legacy_id(metabolite.id, use_hyphens=False), is_metabolite=True
+        )
         metabolite_id_dict[new_id].append(metabolite.id)
         if new_id != metabolite.id:
             # new_id already exists, then merge
@@ -334,7 +364,9 @@ def convert_ids(model):
     # separate ids and compartments, and convert to the new_id_style
     for reaction in model.reactions:
         # apply new id style
-        new_style_id = id_for_new_id_style(fix_legacy_id(reaction.id, use_hyphens=False))
+        new_style_id = id_for_new_id_style(
+            fix_legacy_id(reaction.id, use_hyphens=False)
+        )
 
         # normalize pseudoreaction IDs
         try:
@@ -356,7 +388,9 @@ def convert_ids(model):
         reaction.id = new_id
 
         # fix the gene reaction rules
-        reaction.gene_reaction_rule = _check_rule_prefs(rule_prefs, reaction.gene_reaction_rule)
+        reaction.gene_reaction_rule = _check_rule_prefs(
+            rule_prefs, reaction.gene_reaction_rule
+        )
 
     model.reactions._generate_index()
 
@@ -365,46 +399,51 @@ def convert_ids(model):
         new_id = scrub_gene_id(gene.id)
         gene_id_dict[new_id].append(gene.id)
         for reaction in gene.reactions:
-            reaction.gene_reaction_rule = re.sub(r'\b' + re.escape(gene.id) + r'\b', new_id,
-                                                 reaction.gene_reaction_rule)
+            reaction.gene_reaction_rule = re.sub(
+                r"\b" + re.escape(gene.id) + r"\b", new_id, reaction.gene_reaction_rule
+            )
 
     # remove old genes
     from cobra.manipulation import remove_genes
-    remove_genes(model, [gene for gene in model.genes
-                         if len(gene.reactions) == 0])
+
+    remove_genes(model, [gene for gene in model.genes if len(gene.reactions) == 0])
 
     # fix the model id
-    bigg_id = re.sub(r'[^a-zA-Z0-9_]', '_', model.id)
+    bigg_id = re.sub(r"[^a-zA-Z0-9_]", "_", model.id)
     model.id = bigg_id
 
-    old_ids = {'metabolites': metabolite_id_dict,
-               'reactions': reaction_id_dict,
-               'genes': gene_id_dict}
+    old_ids = {
+        "metabolites": metabolite_id_dict,
+        "reactions": reaction_id_dict,
+        "genes": gene_id_dict,
+    }
 
     return model, old_ids
 
 
 # the regex to separate the base id, the chirality ('_L') and the compartment ('_c')
-reg_compartment = re.compile(r'(.*?)[_\(\[]([a-z][a-z0-9]?)[_\)\]]?$')
-reg_chirality = re.compile(r'(.*?)_?_([LDSRM])$')
+reg_compartment = re.compile(r"(.*?)[_\(\[]([a-z][a-z0-9]?)[_\)\]]?$")
+reg_chirality = re.compile(r"(.*?)_?_([LDSRM])$")
+
+
 def id_for_new_id_style(old_id, is_metabolite=False):
-    """ Get the new style id"""
+    """Get the new style id"""
     new_id = old_id
 
     def _join_parts(the_id, the_compartment):
         if the_compartment:
-            the_id = the_id + '_' + the_compartment
+            the_id = the_id + "_" + the_compartment
         return the_id
 
     def _remove_d_underscore(s):
         """Removed repeated, leading, and trailing underscores."""
-        s = re.sub(r'_+', '_', s)
-        s = re.sub(r'^_+', '', s)
-        s = re.sub(r'_+$', '', s)
+        s = re.sub(r"_+", "_", s)
+        s = re.sub(r"^_+", "", s)
+        s = re.sub(r"_+$", "", s)
         return s
 
     # remove parentheses and brackets, for SBML & BiGG spec compatibility
-    new_id = re.sub(r'[^a-zA-Z0-9_]', '_', new_id)
+    new_id = re.sub(r"[^a-zA-Z0-9_]", "_", new_id)
 
     compartment_match = reg_compartment.match(new_id)
     if compartment_match is None:
@@ -416,20 +455,26 @@ def id_for_new_id_style(old_id, is_metabolite=False):
         if chirality_match is None:
             new_id = _join_parts(_remove_d_underscore(base), compartment)
         else:
-            new_base = '%s__%s' % (_remove_d_underscore(chirality_match.group(1)),
-                                   chirality_match.group(2))
+            new_base = "%s__%s" % (
+                _remove_d_underscore(chirality_match.group(1)),
+                chirality_match.group(2),
+            )
             new_id = _join_parts(new_base, compartment)
 
     return new_id
 
 
 def get_formulas_from_names(model):
-    reg = re.compile(r'.*_([A-Z][A-Z0-9]*)$')
+    reg = re.compile(r".*_([A-Z][A-Z0-9]*)$")
     # support cobra 0.3 and 0.4
     for metabolite in model.metabolites:
-        if (metabolite.formula is not None and str(metabolite.formula) != '' and getattr(metabolite, 'formula', None) is not None):
+        if (
+            metabolite.formula is not None
+            and str(metabolite.formula) != ""
+            and getattr(metabolite, "formula", None) is not None
+        ):
             continue
-        name = getattr(metabolite, 'name', None)
+        name = getattr(metabolite, "name", None)
         if name:
             m = reg.match(name)
             if m:
@@ -438,14 +483,23 @@ def get_formulas_from_names(model):
 
 
 def invalid_formula(formula):
-    return formula is not None and re.search(r'[^A-Za-z0-9]', formula)
+    return formula is not None and re.search(r"[^A-Za-z0-9]", formula)
 
-#-------------
+
+# -------------
 # Model setup
-#-------------
+# -------------
 
-def setup_model(model, substrate_reactions, aerobic=True, sur=10, max_our=10,
-                id_style='cobrapy', fix_iJO1366=False):
+
+def setup_model(
+    model,
+    substrate_reactions,
+    aerobic=True,
+    sur=10,
+    max_our=10,
+    id_style="cobrapy",
+    fix_iJO1366=False,
+):
     """Set up the model with environmntal parameters.
 
     model: a cobra model
@@ -458,9 +512,12 @@ def setup_model(model, substrate_reactions, aerobic=True, sur=10, max_our=10,
     id_style: 'cobrapy' or 'simpheny'.
 
     """
-    if id_style=='cobrapy': o2 = 'EX_o2_e'
-    elif id_style=='simpheny': o2 = 'EX_o2(e)'
-    else: raise Exception('Invalid id_style')
+    if id_style == "cobrapy":
+        o2 = "EX_o2_e"
+    elif id_style == "simpheny":
+        o2 = "EX_o2(e)"
+    else:
+        raise Exception("Invalid id_style")
 
     if isinstance(substrate_reactions, dict):
         for r, v in six.iteritems(substrate_reactions):
@@ -470,7 +527,8 @@ def setup_model(model, substrate_reactions, aerobic=True, sur=10, max_our=10,
             model.reactions.get_by_id(r).lower_bound = -abs(sur)
     elif isinstance(substrate_reactions, str):
         model.reactions.get_by_id(substrate_reactions).lower_bound = -abs(sur)
-    else: raise Exception('bad substrate_reactions argument')
+    else:
+        raise Exception("bad substrate_reactions argument")
 
     if aerobic:
         model.reactions.get_by_id(o2).lower_bound = -abs(max_our)
@@ -478,20 +536,26 @@ def setup_model(model, substrate_reactions, aerobic=True, sur=10, max_our=10,
         model.reactions.get_by_id(o2).lower_bound = 0
 
     # model specific setup
-    if str(model)=='iJO1366' and aerobic==False:
-        for r in ['CAT', 'SPODM', 'SPODMpp']:
+    if str(model) == "iJO1366" and aerobic == False:
+        for r in ["CAT", "SPODM", "SPODMpp"]:
             model.reactions.get_by_id(r).lower_bound = 0
             model.reactions.get_by_id(r).upper_bound = 0
-    if fix_iJO1366 and str(model)=='iJO1366':
-        for r in ['ACACT2r']:
+    if fix_iJO1366 and str(model) == "iJO1366":
+        for r in ["ACACT2r"]:
             model.reactions.get_by_id(r).upper_bound = 0
-        print('made ACACT2r irreversible')
+        print("made ACACT2r irreversible")
 
     # TODO hydrogen reaction for ijo
 
-    if str(model)=='iMM904' and aerobic==False:
-        necessary_ex = ['EX_ergst(e)', 'EX_zymst(e)', 'EX_hdcea(e)',
-                        'EX_ocdca(e)', 'EX_ocdcea(e)', 'EX_ocdcya(e)']
+    if str(model) == "iMM904" and aerobic == False:
+        necessary_ex = [
+            "EX_ergst(e)",
+            "EX_zymst(e)",
+            "EX_hdcea(e)",
+            "EX_ocdca(e)",
+            "EX_ocdcea(e)",
+            "EX_ocdcya(e)",
+        ]
         for r in necessary_ex:
             rxn = model.reactions.get_by_id(r)
             rxn.lower_bound = -1000
@@ -499,21 +563,23 @@ def setup_model(model, substrate_reactions, aerobic=True, sur=10, max_our=10,
 
     return model
 
+
 def turn_on_subsystem(model, subsystem):
     raise NotImplementedError()
     for reaction in model.reactions:
-        if reaction.subsystem.strip('_') == subsystem.strip('_'):
+        if reaction.subsystem.strip("_") == subsystem.strip("_"):
             reaction.lower_bound = -1000 if reaction.reversibility else 0
             reaction.upper_bound = 1000
     return model
 
+
 def carbons_for_exchange_reaction(reaction):
     if len(reaction._metabolites) > 1:
-        raise Exception('%s not an exchange reaction' % str(reaction))
+        raise Exception("%s not an exchange reaction" % str(reaction))
 
     metabolite = next(reaction._metabolites.iterkeys())
     try:
-        return metabolite.formula.elements['C']
+        return metabolite.formula.elements["C"]
     except KeyError:
         return 0
     # match = re.match(r'C([0-9]+)', str(metabolite.formula))
@@ -522,26 +588,28 @@ def carbons_for_exchange_reaction(reaction):
     # except AttributeError:
     #     return 0
 
+
 def fix_legacy_id(id, use_hyphens=False):
-    id = id.replace('_DASH_', '__')
-    id = id.replace('_FSLASH_', '/')
-    id = id.replace('_BSLASH_', "\\")
-    id = id.replace('_LPAREN_', '(')
-    id = id.replace('_LSQBKT_', '[')
-    id = id.replace('_RSQBKT_', ']')
-    id = id.replace('_RPAREN_', ')')
-    id = id.replace('_COMMA_', ',')
-    id = id.replace('_PERIOD_', '.')
-    id = id.replace('_APOS_', "'")
-    id = id.replace('&amp;', '&')
-    id = id.replace('&lt;', '<')
-    id = id.replace('&gt;', '>')
-    id = id.replace('&quot;', '"')
+    id = id.replace("_DASH_", "__")
+    id = id.replace("_FSLASH_", "/")
+    id = id.replace("_BSLASH_", "\\")
+    id = id.replace("_LPAREN_", "(")
+    id = id.replace("_LSQBKT_", "[")
+    id = id.replace("_RSQBKT_", "]")
+    id = id.replace("_RPAREN_", ")")
+    id = id.replace("_COMMA_", ",")
+    id = id.replace("_PERIOD_", ".")
+    id = id.replace("_APOS_", "'")
+    id = id.replace("&amp;", "&")
+    id = id.replace("&lt;", "<")
+    id = id.replace("&gt;", ">")
+    id = id.replace("&quot;", '"')
     if use_hyphens:
-        id = id.replace('__', '-')
+        id = id.replace("__", "-")
     else:
         id = id.replace("-", "__")
     return id
+
 
 def split_compartment(component_id):
     """Split the metabolite bigg_id into a metabolite and a compartment id.
@@ -552,9 +620,9 @@ def split_compartment(component_id):
     component_id: the bigg_id of the metabolite.
 
     """
-    match = re.search(r'_[a-z][a-z0-9]?$', component_id)
+    match = re.search(r"_[a-z][a-z0-9]?$", component_id)
     if match is None:
         raise NotFoundError("No compartment found for %s" % component_id)
-    met = component_id[0:match.start()]
-    compartment = component_id[match.start()+1:]
+    met = component_id[0 : match.start()]
+    compartment = component_id[match.start() + 1 :]
     return met, compartment

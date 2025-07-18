@@ -525,6 +525,7 @@ class Gene(GenomeRegion):
         primary_key=True,
     )
     name = Column(String, nullable=True)
+    bigg_id = Column(String, nullable=False)
     locus_tag = Column(String, nullable=True)
     mapped_to_genbank = Column(Boolean, nullable=False)
     alternative_transcript_of = Column(Integer, ForeignKey("gene.id"), nullable=True)

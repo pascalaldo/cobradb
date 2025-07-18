@@ -210,6 +210,7 @@ def push_reactions(data, session):
 
                     for participant, compound in m[3]:
                         compartment = m[1][participant.compartment]
+                        flip = (m[0]["L"] == "R") if "L" in m[0] else (m["R"] == "L")
                         universal_id = f"{compound.universal_id}_{compartment}"
                         comp_comp_id = f"{universal_id}:{compound.charge}"
 
@@ -255,10 +256,13 @@ def push_reactions(data, session):
                             )
                             session.add(compartmentalized_component_db)
 
+                        coefficient = (
+                            -1 if m[0][participant.side] == "L" else 1
+                        ) * float(participant.coefficient)
                         reaction_matrix_db = ReactionMatrix(
                             reaction_id=reaction_db.id,
                             compartmentalized_component_id=compartmentalized_component_db.id,
-                            coefficient=float(participant.coefficient),
+                            coefficient=coefficient,
                         )
                         session.add(reaction_matrix_db)
         session.commit()
