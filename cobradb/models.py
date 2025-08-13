@@ -2,6 +2,7 @@
 
 """Module to implement ORM to the ome database"""
 
+from operator import itemgetter
 from cobradb.settings import db_connection_string
 
 from sqlalchemy import (
@@ -30,6 +31,7 @@ metadata = MetaData()
 Session = sessionmaker(bind=engine)
 
 COL_ID_STR = String(100)
+COL_HASH_STR = String(2000)
 COL_NAME_STR = String(400)
 COL_HTML_NAME_STR = String(1000)
 COL_FORMULA_STR = String(1000)
@@ -370,7 +372,7 @@ class ModelReaction(Base):
 
     id = Column(Integer, primary_key=True)
     reaction_id = Column(
-        COL_ID_STR,
+        COL_HASH_STR,
         ForeignKey("reaction.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
@@ -467,8 +469,6 @@ class ModelCompartmentalizedComponent(Base):
     compartmentalized_component_id = Column(
         COL_ID_STR, ForeignKey("compartmentalized_component.id"), nullable=False
     )
-    formula = Column(String, nullable=True)
-    charge = Column(Integer, nullable=True)
 
     __table_args__ = (UniqueConstraint("compartmentalized_component_id", "model_id"),)
 
@@ -607,8 +607,8 @@ class ReferenceReactionParticipant(Base):
         )
 
 
-class Reaction(Base):
-    __tablename__ = "reaction"
+class UniversalReaction(Base):
+    __tablename__ = "universal_reaction"
 
     id = Column(COL_ID_STR, primary_key=True)
     # type = Column(String(20))
@@ -620,27 +620,63 @@ class Reaction(Base):
     # __mapper_args__ = {"polymorphic_identity": "reaction", "polymorphic_on": type}
 
     def __repr__(self):
-        return "<cobradb Reaction(id=%d)>" % (
-            self.id,
-            ", pseudoreaction" if self.pseudoreaction else "",
+        return "<cobradb Reaction(id=%d)>" % (self.id,)
+
+
+class Reaction(Base):
+    __tablename__ = "reaction"
+
+    id = Column(COL_HASH_STR, primary_key=True, nullable=False)
+
+    universal_id = Column(COL_ID_STR, ForeignKey(UniversalReaction.id), nullable=False)
+
+    def __repr__(self):
+        return "<cobradb Reaction(id=%d)>" % (self.id,)
+
+    @staticmethod
+    def generate_hash(components):
+        return "/".join(
+            f"{c['coefficient']}${c['compartmentalized_component_id']}"
+            for c in sorted(
+                components,
+                key=itemgetter("coefficient", "compartmentalized_component_id"),
+            )
         )
 
 
-class ReactionMatrix(Base):
-    __tablename__ = "reaction_matrix"
+class UniversalReactionMatrix(Base):
+    __tablename__ = "universal_reaction_matrix"
     id = Column(Integer, primary_key=True)
-    reaction_id = Column(COL_ID_STR, ForeignKey(Reaction.id), nullable=False)
-    compartmentalized_component_id = Column(
+    universal_id = Column(COL_ID_STR, ForeignKey(UniversalReaction.id), nullable=False)
+    universal_compartmentalized_component_id = Column(
         COL_ID_STR,
         ForeignKey(
-            CompartmentalizedComponent.id, onupdate="CASCADE", ondelete="CASCADE"
+            UniversalCompartmentalizedComponent.id,
+            onupdate="CASCADE",
+            ondelete="CASCADE",
         ),
         nullable=False,
     )
     coefficient = Column(Float)
 
     __table_args__ = (
-        UniqueConstraint("reaction_id", "compartmentalized_component_id"),
+        UniqueConstraint("universal_id", "universal_compartmentalized_component_id"),
+    )
+
+
+class ReactionMatrix(Base):
+    __tablename__ = "reaction_matrix"
+    id = Column(Integer, primary_key=True)
+    reaction_id = Column(COL_HASH_STR, ForeignKey(Reaction.id), nullable=False)
+    reaction_matrix_id = Column(
+        Integer, ForeignKey(UniversalReactionMatrix.id), nullable=False
+    )
+    compartmentalized_component_id = Column(
+        COL_ID_STR,
+        ForeignKey(
+            CompartmentalizedComponent.id, onupdate="CASCADE", ondelete="CASCADE"
+        ),
+        nullable=False,
     )
 
 

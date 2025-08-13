@@ -381,6 +381,17 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
             session.query(Component).filter(Component.id == new_biggr_id).first()
         )
 
+        if metabolite_db is not None:
+            charge_zero = 0 if charge is None else charge
+            if (
+                metabolite_db.charge != charge_zero
+                or str(metabolite_db.formula).upper() != str(_formula).upper()
+            ):
+                logging.warn(
+                    f"Found component, but charge or formula did not match: {metabolite_db} (charge: {charge}, formula: {_formula})"
+                )
+                metabolite_db = None
+
         # if necessary, add the new metabolite, and keep track of the ID
         # new_name = scrub_name(getattr(metabolite, "name", None))
         # new_name = f"__{model.id}__{new_name}"
