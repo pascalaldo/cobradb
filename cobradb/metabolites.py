@@ -14,10 +14,13 @@ import pandas as pd
 
 
 def load_default_chebi_mapping():
-    df = pd.read_csv("chebi_pH7_3_mapping.tsv", sep="\t", index_col=0, header=0)
-    df.index = "CHEBI:" + df.index.astype(str)
-    df["CHEBI_PH7_3"] = "CHEBI:" + df["CHEBI_PH7_3"].astype(str)
-    return df["CHEBI_PH7_3"].to_dict()
+    try:
+        df = pd.read_csv("chebi_pH7_3_mapping.tsv", sep="\t", index_col=0, header=0)
+        df.index = "CHEBI:" + df.index.astype(str)
+        df["CHEBI_PH7_3"] = "CHEBI:" + df["CHEBI_PH7_3"].astype(str)
+        return df["CHEBI_PH7_3"].to_dict()
+    except:
+        return {}
 
 
 DEFAULT_CHEBI_MAPPING = load_default_chebi_mapping()
