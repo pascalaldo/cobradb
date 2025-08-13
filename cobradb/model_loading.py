@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from cobradb.metabolites import create_model_specific_metabolite
 from cobradb.models import *
 from cobradb import settings
 from cobradb import parse
@@ -21,6 +22,7 @@ import logging
 from collections import defaultdict
 import os
 from difflib import SequenceMatcher
+from pprint import pprint
 
 import time
 
@@ -158,13 +160,13 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
     else:
         logging.warning("No compartment names file")
         compartment_names = {}
-    # comp_comp_db_ids, final_metabolite_ids = load_metabolites(
-    #     session,
-    #     model_database_id,
-    #     model,
-    #     compartment_names,
-    #     old_parsed_ids["metabolites"],
-    # )
+    comp_comp_db_ids, final_metabolite_ids = load_metabolites(
+        session,
+        model_database_id,
+        model,
+        compartment_names,
+        old_parsed_ids["metabolites"],
+    )
 
     # # reactions
     # model_db_rxn_ids = load_reactions(
@@ -317,6 +319,12 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
 
         preferred = _check_metabolite_duplicates(component_bigg_id)
         new_bigg_id = preferred if preferred else component_bigg_id
+        if (
+            id_map := session.query(ComponentIDMapping)
+            .filter(ComponentIDMapping.old_id == new_bigg_id)
+            .first()
+        ) is not None:
+            new_bigg_id = str(id_map.new_id)
 
         # look for the formula in these places
         formula_fns = [
@@ -363,26 +371,42 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
                 )
             charge = None
 
+        if charge is None:
+            new_biggr_id = f"{new_bigg_id}:0"
+        else:
+            new_biggr_id = f"{new_bigg_id}:{charge}"
+
         # If there is no metabolite, add a new one.
         metabolite_db = (
-            session.query(Component).filter(Component.id == new_bigg_id).first()
+            session.query(Component).filter(Component.id == new_biggr_id).first()
         )
 
         # if necessary, add the new metabolite, and keep track of the ID
-        new_name = scrub_name(getattr(metabolite, "name", None))
+        # new_name = scrub_name(getattr(metabolite, "name", None))
+        # new_name = f"__{model.id}__{new_name}"
         if metabolite_db is None:
             # make the new metabolite
-            metabolite_db = Component(id=new_bigg_id, name=new_name)
-            session.add(metabolite_db)
+            # new_bigg_id = f"__{model.id}__{new_bigg_id}"
+            # new_biggr_id = f"__{model.id}__{new_biggr_id}"
+            _universal_metabolite_id, metabolite_db = create_model_specific_metabolite(
+                bigg_id=new_bigg_id,
+                model_id=model.id,
+                charge=charge,
+                formula=_formula,
+                name="",
+                session=session,
+            )
+            # metabolite_db = Component(id=new_bigg_id, name=new_name)
+            # session.add(metabolite_db)
             # session.commit()
         else:
             # If the metabolite is not new, consider improving the descriptive name
-            improve_name(session, metabolite_db, new_name)
+            # improve_name(session, metabolite_db, new_name)
+            pass
         context[metabolite_id] = {
             "metabolite": metabolite,
             "component_bigg_id": component_bigg_id,
             "compartment_bigg_id": compartment_bigg_id,
-            "new_bigg_id": new_bigg_id,
             "metabolite_db": metabolite_db,
             "_formula": _formula,
             "charge": charge,
@@ -391,20 +415,16 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
 
     for metabolite_id, ctx in context.items():
         # add the deprecated id if necessary
-        metabolite_db, component_bigg_id, compartment_bigg_id = (
-            ctx["metabolite_db"],
-            ctx["component_bigg_id"],
-            ctx["compartment_bigg_id"],
-        )
-        if metabolite_db.id != component_bigg_id:
-            get_or_create(
-                session,
-                DeprecatedID,
-                deprecated_id=component_bigg_id,
-                type="component",
-                ome_id=metabolite_db.id,
-                do_commit=False,
-            )
+        compartment_bigg_id = ctx["compartment_bigg_id"]
+        # if metabolite_db.id != component_bigg_id:
+        #     get_or_create(
+        #         session,
+        #         DeprecatedID,
+        #         deprecated_id=component_bigg_id,
+        #         type="component",
+        #         ome_id=metabolite_db.id,
+        #         do_commit=False,
+        #     )
 
         # if there is no compartment, add a new one
         compartment_db = (
@@ -432,20 +452,43 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
             ctx["metabolite_db"],
             ctx["compartment_db"],
         )
+        universal_comp_comp_id = f"{metabolite_db.universal_id}_{compartment_db.id}"
+        comp_comp_id = (
+            f"{metabolite_db.universal_id}_{compartment_db.id}:{metabolite_db.charge}"
+        )
+        # if there is no compartmentalized component, add a new one
+        universal_comp_component_db = (
+            session.query(UniversalCompartmentalizedComponent)
+            .filter(UniversalCompartmentalizedComponent.id == universal_comp_comp_id)
+            .first()
+        )
+        if universal_comp_component_db is None:
+            universal_comp_component_db = UniversalCompartmentalizedComponent(
+                id=universal_comp_comp_id,
+                universal_component_id=metabolite_db.universal_id,
+                compartment_id=compartment_db.id,
+            )
+            session.add(universal_comp_component_db)
+            # session.commit()
+        ctx["universal_comp_component_db"] = universal_comp_component_db
+
         # if there is no compartmentalized component, add a new one
         comp_component_db = (
             session.query(CompartmentalizedComponent)
-            .filter(CompartmentalizedComponent.component_id == metabolite_db.id)
-            .filter(CompartmentalizedComponent.compartment_id == compartment_db.id)
+            .filter(CompartmentalizedComponent.id == comp_comp_id)
             .first()
         )
         if comp_component_db is None:
             comp_component_db = CompartmentalizedComponent(
-                component_id=metabolite_db.id, compartment_id=compartment_db.id
+                id=comp_comp_id,
+                component_id=metabolite_db.id,
+                universal_id=universal_comp_component_db.id,
+                compartment_id=compartment_db.id,
             )
             session.add(comp_component_db)
             # session.commit()
         ctx["comp_component_db"] = comp_component_db
+
     session.commit()
 
     for metabolite_id, ctx in context.items():
@@ -453,24 +496,18 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
             metabolite,
             comp_component_db,
             compartment_bigg_id,
-            new_bigg_id,
+            metabolite_db,
             _formula,
             charge,
         ) = (
             ctx["metabolite"],
             ctx["comp_component_db"],
             ctx["compartment_bigg_id"],
-            ctx["new_bigg_id"],
+            ctx["metabolite_db"],
             ctx["_formula"],
             ctx["charge"],
         )
-        # remember for adding the reaction
-        comp_comp_db_ids[metabolite.id] = comp_component_db.id
-        final_metabolite_ids[metabolite.id] = "%s_%s" % (
-            new_bigg_id,
-            compartment_bigg_id,
-        )
-
+        new_bigg_id = metabolite_db.universal_id
         # if there is no model compartmentalized component, add a new one
         model_comp_comp_db = (
             session.query(ModelCompartmentalizedComponent)
@@ -485,108 +522,99 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
             model_comp_comp_db = ModelCompartmentalizedComponent(
                 model_id=model_id,
                 compartmentalized_component_id=comp_component_db.id,
-                formula=_formula,
-                charge=charge,
             )
             session.add(model_comp_comp_db)
-            # session.commit()
-        else:
-            if model_comp_comp_db.formula is None:
-                model_comp_comp_db.formula = _formula
-            if model_comp_comp_db.charge is None:
-                model_comp_comp_db.charge = charge
-            # session.commit()
         ctx["model_comp_comp_db"] = model_comp_comp_db
 
     session.commit()
-    for metabolite_id, ctx in context.items():
-        metabolite, comp_component_db, model_comp_comp_db, metabolite_db = (
-            ctx["metabolite"],
-            ctx["comp_component_db"],
-            ctx["model_comp_comp_db"],
-            ctx["metabolite_db"],
-        )
-        # add synonyms
-        for old_bigg_id_c in old_metabolite_ids[metabolite.id]:
-            # Add Synonym and  OldIDSynonym
-            synonym_db = (
-                session.query(Synonym)
-                .filter(Synonym.type == "compartmentalized_component")
-                .filter(Synonym.ome_id == comp_component_db.id)
-                .filter(Synonym.synonym == old_bigg_id_c)
-                .filter(Synonym.data_source_id == data_source_id)
-                .first()
-            )
-            if synonym_db is None:
-                synonym_db = Synonym(
-                    type="compartmentalized_component",
-                    ome_id=comp_component_db.id,
-                    synonym=old_bigg_id_c,
-                    data_source_id=data_source_id,
-                )
-                session.add(synonym_db)
-                # session.commit()
-            old_id_db = (
-                session.query(OldIDSynonym)
-                .filter(OldIDSynonym.type == "model_compartmentalized_component")
-                .filter(OldIDSynonym.ome_id == model_comp_comp_db.id)
-                .filter(OldIDSynonym.synonym_id == synonym_db.id)
-                .first()
-            )
-            if old_id_db is None:
-                old_id_db = OldIDSynonym(
-                    type="model_compartmentalized_component",
-                    ome_id=model_comp_comp_db.id,
-                    synonym_id=synonym_db.id,
-                )
-                session.add(old_id_db)
-                # session.commit()
-
-            # Also add Synonym and OldIDSynonym for the universal metabolite
-            try:
-                new_style_id = parse.id_for_new_id_style(
-                    parse.fix_legacy_id(old_bigg_id_c, use_hyphens=False),
-                    is_metabolite=True,
-                )
-                old_bigg_id_c_without_compartment = parse.split_compartment(
-                    new_style_id
-                )[0]
-            except Exception as e:
-                logging.warning(e.message)
-            else:
-                synonym_db_2 = (
-                    session.query(Synonym)
-                    .filter(Synonym.type == "component")
-                    .filter(Synonym.ome_id == metabolite_db.id)
-                    .filter(Synonym.synonym == old_bigg_id_c_without_compartment)
-                    .filter(Synonym.data_source_id == data_source_id)
-                    .first()
-                )
-                if synonym_db_2 is None:
-                    synonym_db_2 = Synonym(
-                        type="component",
-                        ome_id=metabolite_db.id,
-                        synonym=old_bigg_id_c_without_compartment,
-                        data_source_id=data_source_id,
-                    )
-                    session.add(synonym_db_2)
-                    # session.commit()
-                old_id_db = (
-                    session.query(OldIDSynonym)
-                    .filter(OldIDSynonym.type == "model_compartmentalized_component")
-                    .filter(OldIDSynonym.ome_id == model_comp_comp_db.id)
-                    .filter(OldIDSynonym.synonym_id == synonym_db_2.id)
-                    .first()
-                )
-                if old_id_db is None:
-                    old_id_db = OldIDSynonym(
-                        type="model_compartmentalized_component",
-                        ome_id=model_comp_comp_db.id,
-                        synonym_id=synonym_db_2.id,
-                    )
-                    session.add(old_id_db)
-                    # session.commit()
-    session.commit()
+    # for metabolite_id, ctx in context.items():
+    #     metabolite, comp_component_db, model_comp_comp_db, metabolite_db = (
+    #         ctx["metabolite"],
+    #         ctx["comp_component_db"],
+    #         ctx["model_comp_comp_db"],
+    #         ctx["metabolite_db"],
+    #     )
+    #     # add synonyms
+    # for old_bigg_id_c in old_metabolite_ids[metabolite.id]:
+    #     # Add Synonym and  OldIDSynonym
+    #     synonym_db = (
+    #         session.query(Synonym)
+    #         .filter(Synonym.type == "compartmentalized_component")
+    #         .filter(Synonym.ome_id == comp_component_db.id)
+    #         .filter(Synonym.synonym == old_bigg_id_c)
+    #         .filter(Synonym.data_source_id == data_source_id)
+    #         .first()
+    #     )
+    #     if synonym_db is None:
+    #         synonym_db = Synonym(
+    #             type="compartmentalized_component",
+    #             ome_id=comp_component_db.id,
+    #             synonym=old_bigg_id_c,
+    #             data_source_id=data_source_id,
+    #         )
+    #         session.add(synonym_db)
+    #         # session.commit()
+    #     old_id_db = (
+    #         session.query(OldIDSynonym)
+    #         .filter(OldIDSynonym.type == "model_compartmentalized_component")
+    #         .filter(OldIDSynonym.ome_id == model_comp_comp_db.id)
+    #         .filter(OldIDSynonym.synonym_id == synonym_db.id)
+    #         .first()
+    #     )
+    #     if old_id_db is None:
+    #         old_id_db = OldIDSynonym(
+    #             type="model_compartmentalized_component",
+    #             ome_id=model_comp_comp_db.id,
+    #             synonym_id=synonym_db.id,
+    #         )
+    #         session.add(old_id_db)
+    #         # session.commit()
+    #
+    #     # Also add Synonym and OldIDSynonym for the universal metabolite
+    #     try:
+    #         new_style_id = parse.id_for_new_id_style(
+    #             parse.fix_legacy_id(old_bigg_id_c, use_hyphens=False),
+    #             is_metabolite=True,
+    #         )
+    #         old_bigg_id_c_without_compartment = parse.split_compartment(
+    #             new_style_id
+    #         )[0]
+    #     except Exception as e:
+    #         logging.warning(e.message)
+    #     else:
+    #         synonym_db_2 = (
+    #             session.query(Synonym)
+    #             .filter(Synonym.type == "component")
+    #             .filter(Synonym.ome_id == metabolite_db.id)
+    #             .filter(Synonym.synonym == old_bigg_id_c_without_compartment)
+    #             .filter(Synonym.data_source_id == data_source_id)
+    #             .first()
+    #         )
+    #         if synonym_db_2 is None:
+    #             synonym_db_2 = Synonym(
+    #                 type="component",
+    #                 ome_id=metabolite_db.id,
+    #                 synonym=old_bigg_id_c_without_compartment,
+    #                 data_source_id=data_source_id,
+    #             )
+    #             session.add(synonym_db_2)
+    #             # session.commit()
+    #         old_id_db = (
+    #             session.query(OldIDSynonym)
+    #             .filter(OldIDSynonym.type == "model_compartmentalized_component")
+    #             .filter(OldIDSynonym.ome_id == model_comp_comp_db.id)
+    #             .filter(OldIDSynonym.synonym_id == synonym_db_2.id)
+    #             .first()
+    #         )
+    #         if old_id_db is None:
+    #             old_id_db = OldIDSynonym(
+    #                 type="model_compartmentalized_component",
+    #                 ome_id=model_comp_comp_db.id,
+    #                 synonym_id=synonym_db_2.id,
+    #             )
+    #             session.add(old_id_db)
+    #             # session.commit()
+    # session.commit()
 
     return comp_comp_db_ids, final_metabolite_ids
 

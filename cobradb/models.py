@@ -181,6 +181,7 @@ class UniversalComponent(Base):
 
     id = Column(COL_ID_STR, primary_key=True)
     name = Column(COL_NAME_STR, nullable=True)
+    model_specific = Column(Boolean, nullable=False, default=False)
 
 
 class Component(Base):
@@ -192,6 +193,7 @@ class Component(Base):
     # type = Column(String(20))
     formula = Column(String, nullable=False)
     charge = Column(Integer, nullable=False)
+    model_specific = Column(Boolean, nullable=False, default=False)
 
     # __mapper_args__ = {"polymorphic_identity": "component", "polymorphic_on": type}
 

@@ -208,3 +208,34 @@ def create_metabolite(proposed_bigg_id: str, input_chebi: str, session):
     session.commit()
 
     return {"status": "success", "components_added": successfully_added}
+
+
+def create_model_specific_metabolite(bigg_id, model_id, charge, name, formula, session):
+    if charge is None:
+        charge = 0
+    new_universal_id = f"__{model_id}__{bigg_id}"
+    new_bigg_id = f"__{model_id}__{bigg_id}:{charge}"
+
+    universal_metabolite_db = (
+        session.query(UniversalComponent)
+        .filter(UniversalComponent.id == new_universal_id)
+        .first()
+    )
+    if not universal_metabolite_db:
+        universal_metabolite_db = UniversalComponent(
+            id=new_universal_id, name=name, model_specific=True
+        )
+        session.add(universal_metabolite_db)
+
+    metabolite_db = session.query(Component).filter(Component.id == new_bigg_id).first()
+    if not metabolite_db:
+        metabolite_db = Component(
+            id=new_bigg_id,
+            universal_id=new_universal_id,
+            name=name,
+            formula=formula,
+            charge=charge,
+            model_specific=True,
+        )
+        session.add(metabolite_db)
+    return universal_metabolite_db, metabolite_db
