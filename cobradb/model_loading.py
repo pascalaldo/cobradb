@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 
-from cobradb.metabolites import create_model_specific_metabolite
+from cobradb.metabolites import (
+    are_explicit_formulae_equivalent,
+    create_model_specific_metabolite,
+    fix_explicit_formula,
+)
 from cobradb.models import *
 from cobradb import settings
 from cobradb import parse
@@ -169,14 +173,14 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
     )
 
     # # reactions
-    # model_db_rxn_ids = load_reactions(
-    #     session,
-    #     model_database_id,
-    #     model,
-    #     old_parsed_ids["reactions"],
-    #     comp_comp_db_ids,
-    #     final_metabolite_ids,
-    # )
+    model_db_rxn_ids = load_reactions(
+        session,
+        model_database_id,
+        model,
+        old_parsed_ids["reactions"],
+        comp_comp_db_ids,
+        final_metabolite_ids,
+    )
     #
     # genes
     model_db_rxn_ids = {}
@@ -350,6 +354,7 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
                 % (_formula, metabolite_id, model.id)
             )
             _formula = None
+        _is_orig, _formula = fix_explicit_formula(_formula)
 
         # get charge
         try:
@@ -385,10 +390,10 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
             charge_zero = 0 if charge is None else charge
             if (
                 metabolite_db.charge != charge_zero
-                or str(metabolite_db.formula).upper() != str(_formula).upper()
+                or not are_explicit_formulae_equivalent(metabolite_db.formula, _formula)
             ):
                 logging.warn(
-                    f"Found component, but charge or formula did not match: {metabolite_db} (charge: {charge}, formula: {_formula})"
+                    f"Found component, but charge or formula did not match: {metabolite_db} (charge: {metabolite_db.charge}, formula: {metabolite_db.formula}) != (charge: {charge}, formula: {_formula})"
                 )
                 metabolite_db = None
 
@@ -414,6 +419,7 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
             # If the metabolite is not new, consider improving the descriptive name
             # improve_name(session, metabolite_db, new_name)
             pass
+        final_metabolite_ids[metabolite_id] = metabolite_db.id
         context[metabolite_id] = {
             "metabolite": metabolite,
             "component_bigg_id": component_bigg_id,
@@ -467,6 +473,7 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
         comp_comp_id = (
             f"{metabolite_db.universal_id}_{compartment_db.id}:{metabolite_db.charge}"
         )
+        print(f"LOCATION2: {universal_comp_comp_id} + {comp_comp_id}")
         # if there is no compartmentalized component, add a new one
         universal_comp_component_db = (
             session.query(UniversalCompartmentalizedComponent)
@@ -498,6 +505,7 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
             )
             session.add(comp_component_db)
             # session.commit()
+        comp_comp_db_ids[metabolite_id] = comp_component_db.id
         ctx["comp_component_db"] = comp_component_db
 
     session.commit()
@@ -707,6 +715,15 @@ def _is_deprecated_reaction_id(session, reaction_id):
     )
 
 
+def compartmentalized_id_to_universal_compartmentalized_id(comp_comp_id):
+    try:
+        comp_id, compartment = comp_comp_id.rsplit("_", maxsplit=1)
+        universal_id, _charge = comp_id.rsplit(":", maxsplit=1)
+        return f"{universal_id}_{compartment}"
+    except:
+        return comp_comp_id
+
+
 @timing
 def load_reactions(
     session,
@@ -749,370 +766,150 @@ def load_reactions(
     associated ModelReaction.id in the database.
 
     """
-    start_time = time.time()
     # only grab this once
     data_source_id = get_or_create_data_source(session, "old_bigg_id")
 
     # get reaction hash_prefs
-    hash_prefs = load_tsv(settings.reaction_hash_prefs)
-
-    def _check_hash_prefs(a_hash, is_pseudoreaction):
-        """Return the preferred BiGG ID for a_hash, or None."""
-        for row in hash_prefs:
-            marked_pseudo = len(row) > 2 and row[2] == "pseudoreaction"
-            if row[0] == a_hash and marked_pseudo == is_pseudoreaction:
-                return row[1]
-        return None
-
+    # hash_prefs = load_tsv(settings.reaction_hash_prefs)
+    #
+    # def _check_hash_prefs(a_hash, is_pseudoreaction):
+    #     """Return the preferred BiGG ID for a_hash, or None."""
+    #     for row in hash_prefs:
+    #         marked_pseudo = len(row) > 2 and row[2] == "pseudoreaction"
+    #         if row[0] == a_hash and marked_pseudo == is_pseudoreaction:
+    #             return row[1]
+    #     return None
+    #
     # Generate reaction hashes, and find reactions in the same model in opposite
     # directions.
-    reaction_hashes = {
-        r.id: parse.hash_reaction(r, final_metabolite_ids) for r in model.reactions
-    }
-    reverse_reaction_hashes = {
-        r.id: parse.hash_reaction(r, final_metabolite_ids, reverse=True)
-        for r in model.reactions
-    }
-    reverse_reaction_hashes_rev = {
-        v: k for k, v in six.iteritems(reverse_reaction_hashes)
-    }
-    reactions_not_to_reverse = set()
-    for r_id, h in six.iteritems(reaction_hashes):
-        if h in reverse_reaction_hashes_rev:
-            reactions_not_to_reverse.add(r_id)
-            reactions_not_to_reverse.add(reverse_reaction_hashes_rev[h])
+    # reaction_hashes = {
+    #     r.id: parse.hash_reaction(r, final_metabolite_ids) for r in model.reactions
+    # }
+    # reverse_reaction_hashes = {
+    #     r.id: parse.hash_reaction(r, final_metabolite_ids, reverse=True)
+    #     for r in model.reactions
+    # }
+    # reverse_reaction_hashes_rev = {
+    #     v: k for k, v in six.iteritems(reverse_reaction_hashes)
+    # }
+    # reactions_not_to_reverse = set()
+    # for r_id, h in six.iteritems(reaction_hashes):
+    #     if h in reverse_reaction_hashes_rev:
+    #         reactions_not_to_reverse.add(r_id)
+    #         reactions_not_to_reverse.add(reverse_reaction_hashes_rev[h])
 
     context = {}
-    logging.info(f"CP 1: {time.time() - start_time}")
-    start_time = time.time()
 
     model_db_rxn_ids = {}
     for reaction in model.reactions:
         # Drop duplicates label
         reaction_id = parse.remove_duplicate_tag(reaction.id)
 
+        participants = [
+            dict(
+                compartmentalized_component_id=comp_comp_db_ids.get(m.id, m.id),
+                coefficient=coeff,
+            )
+            for m, coeff in reaction.metabolites.items()
+        ]
+        reaction_hash = Reaction.generate_hash(participants)
+
         # Get the reaction
-        reaction_db = session.query(Reaction).filter(Reaction.id == reaction_id).first()
-
-        # check for pseudoreaction
-        is_pseudoreaction = check_pseudoreaction(reaction_id)
-
-        # calculate the hash
-        reaction_hash = reaction_hashes[reaction.id]
-        hash_db = (
-            session.query(Reaction)
-            .filter(Reaction.reaction_hash == reaction_hash)
-            .filter(Reaction.pseudoreaction == is_pseudoreaction)
-            .first()
+        reaction_db = (
+            session.query(Reaction).filter(Reaction.id == reaction_hash).first()
         )
-        # If there wasn't a match for the forward hash, also check the reverse
-        # hash. Do not check reverse hash for reactions with both directions
-        # defined in the same model (e.g. SUCDi and FRD7).
-        if not hash_db and reaction.id not in reactions_not_to_reverse:
-            reverse_hash_db = (
-                session.query(Reaction)
-                .filter(Reaction.reaction_hash == reverse_reaction_hashes[reaction.id])
-                .filter(Reaction.pseudoreaction == is_pseudoreaction)
+
+        if reaction_db is None:
+            universal_participants = [
+                dict(
+                    universal_compartmentalized_component_id=compartmentalized_id_to_universal_compartmentalized_id(
+                        comp_comp_db_ids.get(m.id, m.id)
+                    ),
+                    coefficient=coeff,
+                )
+                for m, coeff in reaction.metabolites.items()
+            ]
+            universal_reaction_hash = UniversalReaction.generate_hash(
+                universal_participants
+            )
+            universal_reaction_db = (
+                session.query(UniversalReaction)
+                .filter(UniversalReaction.hash == universal_reaction_hash)
                 .first()
             )
-        else:
-            reverse_hash_db = None
+            if universal_reaction_db is None:
+                # TODO: Model-specific reactions
+                continue
+            logging.warn(f"\t UniversalReaction {reaction_id}: {universal_reaction_db}")
+            # TODO: Generate reaction with alternative component variants
 
-        # bigg_id match  hash match b==h  pseudoreaction  example                   function
-        #  n               n               n            first GAPD                _new_reaction (1)
-        #  n               n               y            first EX_glc_e            _new_reaction (1)
-        #  y               n               n            incorrect GAPD            _new_reaction & increment (2)
-        #  y               n               y            incorrect EX_glc_e        _new_reaction & increment (2)
-        #  n               y               n            GAPDH after GAPD          reaction = hash_reaction (3a)
-        #  n               y               y            EX_glc__e after EX_glc_e  reaction = hash_reaction (3a)
-        #  y               y         n     n            ?                         reaction = hash_reaction (3a)
-        #  y               y         n     y            ?                         reaction = hash_reaction (3a)
-        #  y               y         y     n            second GAPD               reaction = bigg_reaction (3b)
-        #  y               y         y     y            second EX_glc_e           reaction = bigg_reaction (3b)
-        # NOTE: only check pseudoreaction hash against other pseudoreactions
-        # 4a and 4b are 3a and 3b with a reversed reaction
+        if reaction_db is None:
+            # TODO: Model-specific reactions
+            continue
 
-        def _find_new_incremented_id(session, original_id):
-            """Look for a reaction bigg_id that is not already taken."""
-            new_id = increment_id(original_id)
-            while True:
-                # Check for existing and deprecated reaction ids
-                if session.query(Reaction).filter(
-                    Reaction.id == new_id
-                ).first() is None and not _is_deprecated_reaction_id(session, new_id):
-                    return new_id
-                new_id = increment_id(new_id)
+        logging.warn(f"Reaction {reaction_id}: {reaction_db}")
 
-        # Check for a preferred ID in the preferences, based on the forward
-        # hash. Don't check the reverse hash in preferences.
-        preferred_id = _check_hash_prefs(reaction_hash, is_pseudoreaction)
-
-        # no reversed by default
-        is_reversed = False
-        is_new = False
-
-        # (0) If there is a preferred ID, make that the new ID, and increment any old IDs
-        if preferred_id is not None:
-            logging.info("CP 2.1")
-            # if the reaction already matches, just continue
-            if hash_db is not None and hash_db.id == preferred_id:
-                reaction_db = hash_db
-            # otherwise, make the new reaction
-            else:
-                # if existing reactions match the preferred reaction find a new,
-                # incremented id for the existing match
-                preferred_id_db = (
-                    session.query(Reaction).filter(Reaction.id == preferred_id).first()
-                )
-                if preferred_id_db is not None:
-                    new_id = _find_new_incremented_id(session, preferred_id)
-                    logging.warning(
-                        "Incrementing database reaction {} to {} and prefering {} (from model {}) based on hash preferences".format(
-                            preferred_id, new_id, preferred_id, model.id
-                        )
-                    )
-                    preferred_id_db.id = new_id
-                    session.commit()
-
-                # make a new reaction for the preferred_id
-                reaction_db = _new_reaction(
-                    session,
-                    reaction,
-                    preferred_id,
-                    reaction_hash,
-                    is_pseudoreaction,
-                )
-                is_new = True
-
-        # (1) no bigg_id matches, no stoichiometry match or pseudoreaction, then
-        # make a new reaction
-        elif reaction_db is None and hash_db is None and reverse_hash_db is None:
-            logging.info("CP 2.2")
-            # check that the id is not deprecated
-            if _is_deprecated_reaction_id(session, reaction.id):
-                logging.error(
-                    (
-                        "Keeping bigg_id {} (hash {} - from model {}) "
-                        "even though it is on the deprecated ID list. "
-                        "You should add it to reaction-hash-prefs.txt"
-                    ).format(reaction_id, reaction_hash, model.id)
-                )
-            reaction_db = _new_reaction(
-                session,
-                reaction,
-                reaction_id,
-                reaction_hash,
-                is_pseudoreaction,
+        reaction_matrix_db = (
+            session.query(ReactionMatrix, UniversalReactionMatrix)
+            .join(
+                UniversalReactionMatrix,
+                UniversalReactionMatrix.id == ReactionMatrix.reaction_matrix_id,
             )
-            is_new = True
-
-        # (2) bigg_id matches, but not the hash, then increment the BIGG_ID
-        elif reaction_db is not None and hash_db is None and reverse_hash_db is None:
-            logging.info("CP 2.3")
-            # loop until we find a non-matching find non-matching ID
-            new_id = _find_new_incremented_id(session, reaction.id)
-            logging.warning(
-                "Incrementing bigg_id {} to {} (from model {}) based on conflicting reaction hash".format(
-                    reaction_id, new_id, model.id
-                )
-            )
-            reaction_db = _new_reaction(
-                session,
-                reaction,
-                new_id,
-                reaction_hash,
-                is_pseudoreaction,
-            )
-            is_new = True
-
-        # (3) but found a stoichiometry match, then use the hash reaction match.
-        elif hash_db is not None:
-            logging.info("CP 2.4")
-            # WARNING TODO this requires that loaded metabolites always match on
-            # bigg_id, which should be the case.
-
-            # (3a)
-            if reaction_db is None or reaction_db.id != hash_db.id:
-                reaction_db = hash_db
-            # (3b) BIGG ID matches a reaction with the same hash, then just continue
-            else:
-                pass
-
-        # (4) but found a stoichiometry match, then use the hash reaction match.
-        elif reverse_hash_db is not None:
-            logging.info("CP 2.5")
-            # WARNING TODO this requires that loaded metabolites always match on
-            # bigg_id, which should be the case.
-
-            # Remember to switch upper and lower bounds
-            is_reversed = True
-            logging.info(
-                "Matched {} to {} based on reverse hash".format(
-                    reaction_id, reverse_hash_db.id
-                )
-            )
-
-            # (4a)
-            if reaction_db is None or reaction_db.id != reverse_hash_db.id:
-                reaction_db = reverse_hash_db
-            # (4b) BIGG ID matches a reaction with the same hash, then just continue
-            else:
-                pass
-
-        else:
-            logging.info("CP 2.6")
-            raise Exception("Should not get here")
-
-        context[reaction_id] = {
-            "reaction": reaction,
-            "reaction_db": reaction_db,
-            "is_new": is_new,
-            "is_reversed": is_reversed,
-        }
-    session.commit()
-    logging.info(f"CP 2: {time.time() - start_time}")
-    start_time = time.time()
-
-    for reaction_id, ctx in context.items():
-        reaction, reaction_db, is_new, is_reversed = (
-            ctx["reaction"],
-            ctx["reaction_db"],
-            ctx["is_new"],
-            ctx["is_reversed"],
+            .filter(ReactionMatrix.reaction_id == reaction_db.id)
+            .all()
         )
-        if is_new:
-            _new_reaction_add_metabolites(
-                session, reaction, reaction_db, model, comp_comp_db_ids
-            )
-
-        # If the reaction is not new, consider improving the descriptive name
-        if not is_new:
-            new_name = scrub_name(check_none(getattr(reaction, "name", None)))
-            improve_name(session, reaction_db, new_name)
-
-        # Add reaction to deprecated ID list if necessary
-        if reaction_db.id != reaction_id:
-            get_or_create(
-                session,
-                DeprecatedID,
-                deprecated_id=reaction_id,
-                type="reaction",
-                ome_id=reaction_db.id,
-                do_commit=False,
-            )
+        model_reaction_is_reversed = False
+        for rm_db, urm_db in reaction_matrix_db:
+            # TODO: May fail in some cases where metabolites occur at both sides
+            for m, coeff in reaction.metabolites.items():
+                comp_comp_id = comp_comp_db_ids.get(m.id, m.id)
+                if comp_comp_id == rm_db.compartmentalized_component_id:
+                    if urm_db.coefficient == coeff:
+                        pass
+                    elif urm_db.coefficient == -1 * coeff:
+                        model_reaction_is_reversed = True
+                    else:
+                        logging.error(
+                            f"Coefficients do not match for {reaction_id}, {comp_comp_id}"
+                        )
+            break
 
         # If the reaction is reversed, then switch upper and lower bound
-        lower_bound = -reaction.upper_bound if is_reversed else reaction.lower_bound
-        upper_bound = -reaction.lower_bound if is_reversed else reaction.upper_bound
+        lower_bound = (
+            -reaction.upper_bound
+            if model_reaction_is_reversed
+            else reaction.lower_bound
+        )
+        upper_bound = (
+            -reaction.lower_bound
+            if model_reaction_is_reversed
+            else reaction.upper_bound
+        )
 
         # subsystem
         subsystem = check_none(reaction.subsystem.strip())
 
-        # get the model reaction
-        model_reaction_db = (
+        copy_number = (
             session.query(ModelReaction)
             .filter(ModelReaction.reaction_id == reaction_db.id)
             .filter(ModelReaction.model_id == model_db_id)
-            .filter(ModelReaction.lower_bound == lower_bound)
-            .filter(ModelReaction.upper_bound == upper_bound)
-            .filter(ModelReaction.gene_reaction_rule == reaction.gene_reaction_rule)
-            .filter(
-                ModelReaction.objective_coefficient == reaction.objective_coefficient
-            )
-            .filter(ModelReaction.subsystem == subsystem)
-            .first()
+            .count()
+        ) + 1
+
+        # make a new reaction
+        model_reaction_db = ModelReaction(
+            model_id=model_db_id,
+            reaction_id=reaction_db.id,
+            gene_reaction_rule=reaction.gene_reaction_rule,
+            original_gene_reaction_rule=reaction.gene_reaction_rule,
+            upper_bound=upper_bound,
+            lower_bound=lower_bound,
+            objective_coefficient=reaction.objective_coefficient,
+            copy_number=copy_number,
+            subsystem=subsystem,
         )
-        if model_reaction_db is None:
-            # get the number of existing copies of this reaction in the model
-            copy_number = (
-                session.query(ModelReaction)
-                .filter(ModelReaction.reaction_id == reaction_db.id)
-                .filter(ModelReaction.model_id == model_db_id)
-                .count()
-            ) + 1
-            # make a new reaction
-            model_reaction_db = ModelReaction(
-                model_id=model_db_id,
-                reaction_id=reaction_db.id,
-                gene_reaction_rule=reaction.gene_reaction_rule,
-                original_gene_reaction_rule=reaction.gene_reaction_rule,
-                upper_bound=upper_bound,
-                lower_bound=lower_bound,
-                objective_coefficient=reaction.objective_coefficient,
-                copy_number=copy_number,
-                subsystem=subsystem,
-            )
-            session.add(model_reaction_db)
-            session.commit()
-        ctx["model_reaction_db"] = model_reaction_db
-    session.commit()
-    logging.info(f"CP 3: {time.time() - start_time}")
-    start_time = time.time()
-
-    for reaction_id, ctx in context.items():
-        reaction, reaction_db, model_reaction_db = (
-            ctx["reaction"],
-            ctx["reaction_db"],
-            ctx["model_reaction_db"],
-        )
-        # remember the changed ids
-        model_db_rxn_ids[reaction.id] = model_reaction_db.id
-
-        # add synonyms
-        #
-        # get the id from the published model
-        old_bigg_synonyms = {}
-        for old_bigg_id in old_reaction_ids[reaction.id]:
-            # add a synonym
-            synonym_db = (
-                session.query(Synonym)
-                .filter(Synonym.type == "reaction")
-                .filter(Synonym.ome_id == reaction_db.id)
-                .filter(Synonym.synonym == old_bigg_id)
-                .filter(Synonym.data_source_id == data_source_id)
-                .first()
-            )
-            if synonym_db is None:
-                synonym_db = Synonym(
-                    type="reaction",
-                    ome_id=reaction_db.id,
-                    synonym=old_bigg_id,
-                    data_source_id=data_source_id,
-                )
-                session.add(synonym_db)
-                # session.commit()
-            old_bigg_synonyms[old_bigg_id] = synonym_db
-        ctx["old_bigg_synonyms"] = old_bigg_synonyms
-    session.commit()
-    logging.info(f"CP 4: {time.time() - start_time}")
-    start_time = time.time()
-
-    for reaction, ctx in context.items():
-        model_reaction_db, old_bigg_synonyms = (
-            ctx["model_reaction_db"],
-            ctx["old_bigg_synonyms"],
-        )
-        for old_bigg_id, synonym_db in old_bigg_synonyms.items():
-            # add OldIDSynonym
-            old_id_db = (
-                session.query(OldIDSynonym)
-                .filter(OldIDSynonym.type == "model_reaction")
-                .filter(OldIDSynonym.ome_id == model_reaction_db.id)
-                .filter(OldIDSynonym.synonym_id == synonym_db.id)
-                .first()
-            )
-            if old_id_db is None:
-                old_id_db = OldIDSynonym(
-                    type="model_reaction",
-                    ome_id=model_reaction_db.id,
-                    synonym_id=synonym_db.id,
-                )
-                session.add(old_id_db)
-                # session.commit()
-    session.commit()
-    logging.info(f"CP 5: {time.time() - start_time}")
-    start_time = time.time()
-
+        session.add(model_reaction_db)
+        session.commit()
     return model_db_rxn_ids
 
 

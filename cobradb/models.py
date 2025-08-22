@@ -3,6 +3,8 @@
 """Module to implement ORM to the ome database"""
 
 from operator import itemgetter
+
+from numpy import isin
 from cobradb.settings import db_connection_string
 
 from sqlalchemy import (
@@ -206,6 +208,7 @@ class Component(Base):
 class ComponentReferenceMapping(Base):
     __tablename__ = "component_reference_mapping"
 
+    # TODO: ID can be component_id, right?
     id = Column(Integer, primary_key=True)
     component_id = Column(COL_ID_STR, ForeignKey(Component.id), nullable=False)
     universal_id = Column(COL_ID_STR, ForeignKey(UniversalComponent.id), nullable=False)
@@ -215,6 +218,7 @@ class ComponentReferenceMapping(Base):
 
 class UniversalComponentReferenceMapping(Base):
     __tablename__ = "univeral_component_reference_mapping"
+    # TODO: Can probalbly be removed
     id = Column(COL_ID_STR, ForeignKey(UniversalComponent.id), primary_key=True)
     mapping_id = Column(
         Integer, ForeignKey(ComponentReferenceMapping.id), nullable=False
@@ -611,6 +615,7 @@ class UniversalReaction(Base):
     __tablename__ = "universal_reaction"
 
     id = Column(COL_ID_STR, primary_key=True)
+    hash = Column(COL_HASH_STR, nullable=True)
     # type = Column(String(20))
     name = Column(String, nullable=True)
     reference_id = Column(COL_ID_STR, ForeignKey(ReferenceReaction.id), nullable=False)
@@ -620,7 +625,27 @@ class UniversalReaction(Base):
     # __mapper_args__ = {"polymorphic_identity": "reaction", "polymorphic_on": type}
 
     def __repr__(self):
-        return "<cobradb Reaction(id=%d)>" % (self.id,)
+        return "<cobradb Reaction(id=%s)>" % (self.id,)
+
+    @staticmethod
+    def generate_hash(components):
+        comp_dict = {}
+        for c in components:
+            cc_id = c["universal_compartmentalized_component_id"]
+            comp_dict[cc_id] = comp_dict.get(cc_id, 0) + c["coefficient"]
+            if comp_dict[cc_id] == 0:
+                del comp_dict[cc_id]
+        sorting_1 = sorted(comp_dict.items(), key=lambda x: (x[0], abs(x[1])))
+        first_item = next(iter(sorting_1))
+        if first_item[1] > 0:
+            comp_dict = {k: -1 * v for k, v in comp_dict.items()}
+        return "/".join(
+            f"{Reaction.coefficient_to_string(coeff)}${cc_id}"
+            for cc_id, coeff in sorted(
+                comp_dict.items(),
+                key=itemgetter(0, 1),
+            )
+        )
 
 
 class Reaction(Base):
@@ -631,15 +656,39 @@ class Reaction(Base):
     universal_id = Column(COL_ID_STR, ForeignKey(UniversalReaction.id), nullable=False)
 
     def __repr__(self):
-        return "<cobradb Reaction(id=%d)>" % (self.id,)
+        return "<cobradb Reaction(id=%s)>" % (self.id,)
+
+    @staticmethod
+    def coefficient_to_string(coefficient):
+        if coefficient is None:
+            return 0
+        if isinstance(coefficient, str):
+            return coefficient
+        if isinstance(coefficient, int):
+            return str(coefficient)
+        if isinstance(coefficient, float):
+            if coefficient.is_integer():
+                return str(int(coefficient))
+            else:
+                return str(coefficient)
 
     @staticmethod
     def generate_hash(components):
+        comp_dict = {}
+        for c in components:
+            cc_id = c["compartmentalized_component_id"]
+            comp_dict[cc_id] = comp_dict.get(cc_id, 0) + c["coefficient"]
+            if comp_dict[cc_id] == 0:
+                del comp_dict[cc_id]
+        sorting_1 = sorted(comp_dict.items(), key=lambda x: (x[0], abs(x[1])))
+        first_item = next(iter(sorting_1))
+        if first_item[1] > 0:
+            comp_dict = {k: -1 * v for k, v in comp_dict.items()}
         return "/".join(
-            f"{c['coefficient']}${c['compartmentalized_component_id']}"
-            for c in sorted(
-                components,
-                key=itemgetter("coefficient", "compartmentalized_component_id"),
+            f"{Reaction.coefficient_to_string(coeff)}${cc_id}"
+            for cc_id, coeff in sorted(
+                comp_dict.items(),
+                key=itemgetter(0, 1),
             )
         )
 

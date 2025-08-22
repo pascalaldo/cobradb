@@ -12,6 +12,49 @@ import re
 from pprint import pprint
 import pandas as pd
 
+FORMULA_PATTERN = re.compile(r"(([A-Z][a-z]?)([0-9])*)+")
+FORMULA_PATTERN_SINGLE = re.compile(r"([A-Z][a-z]?)([0-9])*")
+
+
+def fix_explicit_formula(formula):
+    m = FORMULA_PATTERN.fullmatch(formula)
+    if m is None:
+        return False, None
+
+    new_formula = ""
+    is_original_formula = False
+    for m in FORMULA_PATTERN_SINGLE.finditer(formula):
+        atom = m[1]
+        mult = m[2]
+        if atom == "R":
+            return False, None
+        if mult is not None and int(mult) == "1":
+            new_formula = new_formula + atom
+            is_original_formula = False
+        else:
+            new_formula = new_formula + m[0]
+    return is_original_formula, new_formula
+
+
+def _formula_to_dict(formula):
+    d = {}
+    for m in FORMULA_PATTERN_SINGLE.finditer(formula):
+        atom = m[1]
+        mult = m[2]
+        if mult is None:
+            mult = 1
+        mult = int(mult)
+        d[atom] = mult
+    return d
+
+
+def are_explicit_formulae_equivalent(formula1, formula2):
+    if formula1 is None or formula2 is None:
+        return False
+    d1 = _formula_to_dict(formula1)
+    d2 = _formula_to_dict(formula2)
+    return d1 == d2
+
 
 def load_default_chebi_mapping():
     try:
