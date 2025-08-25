@@ -14,6 +14,7 @@ services:
     volumes:
       - /data/biggr-genbank:/genbank
       - /data/biggr-assemblies:/assemblies
+      - /data/biggr-bigg-models:/models
     stdin_open: true
     tty: true
   biggr-db:

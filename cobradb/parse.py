@@ -342,17 +342,22 @@ def convert_ids(model):
 
     # fix metabolites
     for metabolite in model.metabolites:
+        old_metabolite_id = metabolite.id
         new_id = id_for_new_id_style(
-            fix_legacy_id(metabolite.id, use_hyphens=False), is_metabolite=True
+            fix_legacy_id(old_metabolite_id, use_hyphens=False), is_metabolite=True
         )
-        metabolite_id_dict[new_id].append(metabolite.id)
-        if new_id != metabolite.id:
+        metabolite_id_dict[new_id].append(old_metabolite_id)
+        if new_id != old_metabolite_id:
+
             # new_id already exists, then merge
             if new_id in model.metabolites:
                 new_id = add_duplicate_tag(new_id)
                 while new_id in model.metabolites:
                     new_id = increment_id(new_id)
             metabolite.id = new_id
+    for metabolite in model.metabolites:
+        # Create temporary, model-specific identifiers
+        metabolite.id = f"__{model.id}__{metabolite.id}"
     model.metabolites._generate_index()
 
     # take out the _b metabolites
@@ -391,7 +396,9 @@ def convert_ids(model):
         reaction.gene_reaction_rule = _check_rule_prefs(
             rule_prefs, reaction.gene_reaction_rule
         )
-
+    for reaction in model.reactions:
+        # Create temporary, model-specific identifiers
+        reaction.id = f"__{model.id}__{reaction.id}"
     model.reactions._generate_index()
 
     # update the genes

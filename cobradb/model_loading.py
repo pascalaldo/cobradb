@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from cobra.io import write_sbml_model
 from cobradb.metabolites import (
     are_explicit_formulae_equivalent,
     create_model_specific_metabolite,
@@ -193,6 +194,10 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
 
     session.commit()
 
+    model_output_path = f"/models/test.biggr.sbml"
+    logging.warning(f"Writing corrected model to: {model_output_path}")
+    write_sbml_model(model, model_output_path)
+
     return model_bigg_id
 
 
@@ -306,7 +311,9 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
 
     # for each metabolite in the model
     for metabolite in model.metabolites:
-        metabolite_id = parse.remove_duplicate_tag(metabolite.id)
+        model_specific_id = metabolite.id
+        metabolite_id = model_specific_id.removeprefix(f"__{model.id}__")
+        metabolite_id = parse.remove_duplicate_tag(metabolite_id)
 
         try:
             component_bigg_id, compartment_bigg_id = parse.split_compartment(
@@ -420,6 +427,7 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
             # improve_name(session, metabolite_db, new_name)
             pass
         final_metabolite_ids[metabolite_id] = metabolite_db.id
+
         context[metabolite_id] = {
             "metabolite": metabolite,
             "component_bigg_id": component_bigg_id,
@@ -473,7 +481,6 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
         comp_comp_id = (
             f"{metabolite_db.universal_id}_{compartment_db.id}:{metabolite_db.charge}"
         )
-        print(f"LOCATION2: {universal_comp_comp_id} + {comp_comp_id}")
         # if there is no compartmentalized component, add a new one
         universal_comp_component_db = (
             session.query(UniversalCompartmentalizedComponent)
@@ -546,6 +553,18 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
         ctx["model_comp_comp_db"] = model_comp_comp_db
 
     session.commit()
+
+    for metabolite_id, ctx in context.items():
+        (
+            metabolite,
+            universal_comp_component_db,
+        ) = (
+            ctx["metabolite"],
+            ctx["universal_comp_component_db"],
+        )
+        if universal_comp_component_db is not None:
+            metabolite.id = universal_comp_component_db.id
+
     # for metabolite_id, ctx in context.items():
     #     metabolite, comp_component_db, model_comp_comp_db, metabolite_db = (
     #         ctx["metabolite"],
@@ -803,11 +822,13 @@ def load_reactions(
     model_db_rxn_ids = {}
     for reaction in model.reactions:
         # Drop duplicates label
-        reaction_id = parse.remove_duplicate_tag(reaction.id)
+        model_specific_id = reaction.id
+        reaction_id = model_specific_id.removeprefix(f"__{model.id}__")
+        reaction_id = parse.remove_duplicate_tag(reaction_id)
 
         participants = [
             dict(
-                compartmentalized_component_id=comp_comp_db_ids.get(m.id, m.id),
+                compartmentalized_component_id=f"{m.id}:{int(m.charge)}",
                 coefficient=coeff,
             )
             for m, coeff in reaction.metabolites.items()
@@ -862,7 +883,7 @@ def load_reactions(
         for rm_db, urm_db in reaction_matrix_db:
             # TODO: May fail in some cases where metabolites occur at both sides
             for m, coeff in reaction.metabolites.items():
-                comp_comp_id = comp_comp_db_ids.get(m.id, m.id)
+                comp_comp_id = f"{m.id}:{m.charge}"
                 if comp_comp_id == rm_db.compartmentalized_component_id:
                     if urm_db.coefficient == coeff:
                         pass
@@ -895,6 +916,10 @@ def load_reactions(
             .filter(ModelReaction.model_id == model_db_id)
             .count()
         ) + 1
+
+        reaction.id = (
+            reaction_id if copy_number == 1 else f"{reaction_id}:{copy_number}"
+        )
 
         # make a new reaction
         model_reaction_db = ModelReaction(

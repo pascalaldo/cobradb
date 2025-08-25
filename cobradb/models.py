@@ -195,7 +195,7 @@ class Component(Base):
     universal_id = Column(COL_ID_STR, ForeignKey(UniversalComponent.id), nullable=False)
     name = Column(String, nullable=True)
     # type = Column(String(20))
-    formula = Column(String, nullable=False)
+    formula = Column(String, nullable=True)
     charge = Column(Integer, nullable=False)
     model_specific = Column(Boolean, nullable=False, default=False)
 
