@@ -275,6 +275,15 @@ def find_reference_reaction(proposed_ids, parsed_participants, session):
 @timing
 def push_reactions(data, session):
     for n, (bigg_id, reaction_data) in enumerate(data.items()):
+        if bigg_id != "ARGtex":
+            continue
+        universal_reaction_db = (
+            session.query(UniversalReaction)
+            .filter(UniversalReaction.id == bigg_id)
+            .first()
+        )
+        if universal_reaction_db is not None:
+            continue
         print("###")
         print(f"{bigg_id}: {reaction_data['name']}")
         print(f" RHEA: {reaction_data.get('rhea')}")
@@ -300,7 +309,9 @@ def push_reactions(data, session):
 
         if reference_db is not None and m is not None:
             universal_reaction_db = (
-                session.query(UniversalReaction).filter(Reaction.id == bigg_id).first()
+                session.query(UniversalReaction)
+                .filter(UniversalReaction.id == bigg_id)
+                .first()
             )
             # if not universal_reaction_db:
             #     universal_reaction_db = UniversalReaction(
@@ -317,6 +328,8 @@ def push_reactions(data, session):
 
             print(f"TIME: MISC1: {(t1 := time.time()) - t0}")
             t0 = t1
+
+            pprint(m)
 
             for participant, compound, crmapping in m[3]:
                 compartment = m[1][participant.compartment]
@@ -374,6 +387,7 @@ def push_reactions(data, session):
                 # TODO: Check if exists
                 universal_reaction_matrix_info_item = dict(
                     universal_compartmentalized_component_id=universal_compartmentalized_component_db.id,
+                    reference_reaction_participant_id=participant.id,
                     coefficient=coefficient,
                 )
                 universal_reaction_matrix_info.append(
@@ -419,6 +433,9 @@ def push_reactions(data, session):
                         universal_id=urm["universal_id"],
                         universal_compartmentalized_component_id=urm[
                             "universal_compartmentalized_component_id"
+                        ],
+                        reference_reaction_participant_id=urm[
+                            "reference_reaction_participant_id"
                         ],
                         coefficient=urm["coefficient"],
                     )

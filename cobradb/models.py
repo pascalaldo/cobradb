@@ -697,6 +697,9 @@ class UniversalReactionMatrix(Base):
     __tablename__ = "universal_reaction_matrix"
     id = Column(Integer, primary_key=True)
     universal_id = Column(COL_ID_STR, ForeignKey(UniversalReaction.id), nullable=False)
+    reference_reaction_participant_id = Column(
+        Integer, ForeignKey(ReferenceReactionParticipant.id), nullable=True
+    )
     universal_compartmentalized_component_id = Column(
         COL_ID_STR,
         ForeignKey(
