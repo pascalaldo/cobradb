@@ -618,7 +618,7 @@ class UniversalReaction(Base):
     hash = Column(COL_HASH_STR, nullable=True)
     # type = Column(String(20))
     name = Column(String, nullable=True)
-    reference_id = Column(COL_ID_STR, ForeignKey(ReferenceReaction.id), nullable=False)
+    reference_id = Column(COL_ID_STR, ForeignKey(ReferenceReaction.id), nullable=True)
     # reaction_hash = Column(String, nullable=False)
     # pseudoreaction = Column(Boolean, default=False)
 
@@ -633,8 +633,8 @@ class UniversalReaction(Base):
         for c in components:
             cc_id = c["universal_compartmentalized_component_id"]
             comp_dict[cc_id] = comp_dict.get(cc_id, 0) + c["coefficient"]
-            if comp_dict[cc_id] == 0:
-                del comp_dict[cc_id]
+            # if comp_dict[cc_id] == 0:
+            #     del comp_dict[cc_id]
         sorting_1 = sorted(comp_dict.items(), key=lambda x: (x[0], abs(x[1])))
         first_item = next(iter(sorting_1))
         if first_item[1] > 0:
@@ -678,8 +678,8 @@ class Reaction(Base):
         for c in components:
             cc_id = c["compartmentalized_component_id"]
             comp_dict[cc_id] = comp_dict.get(cc_id, 0) + c["coefficient"]
-            if comp_dict[cc_id] == 0:
-                del comp_dict[cc_id]
+            # if comp_dict[cc_id] == 0:
+            #     del comp_dict[cc_id]
         sorting_1 = sorted(comp_dict.items(), key=lambda x: (x[0], abs(x[1])))
         first_item = next(iter(sorting_1))
         if first_item[1] > 0:
