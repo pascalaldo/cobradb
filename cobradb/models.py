@@ -32,8 +32,9 @@ Base = declarative_base()
 metadata = MetaData()
 Session = sessionmaker(bind=engine)
 
+HASH_STR_MAX_LEN = 1000
 COL_ID_STR = String(100)
-COL_HASH_STR = String(2000)
+COL_HASH_STR = String(HASH_STR_MAX_LEN)
 COL_NAME_STR = String(400)
 COL_HTML_NAME_STR = String(1000)
 COL_FORMULA_STR = String(1000)
@@ -208,7 +209,6 @@ class Component(Base):
 class ComponentReferenceMapping(Base):
     __tablename__ = "component_reference_mapping"
 
-    # TODO: ID can be component_id, right?
     id = Column(Integer, primary_key=True)
     component_id = Column(COL_ID_STR, ForeignKey(Component.id), nullable=False)
     universal_id = Column(COL_ID_STR, ForeignKey(UniversalComponent.id), nullable=False)
@@ -217,8 +217,7 @@ class ComponentReferenceMapping(Base):
 
 
 class UniversalComponentReferenceMapping(Base):
-    __tablename__ = "univeral_component_reference_mapping"
-    # TODO: Can probalbly be removed
+    __tablename__ = "universal_component_reference_mapping"
     id = Column(COL_ID_STR, ForeignKey(UniversalComponent.id), primary_key=True)
     mapping_id = Column(
         Integer, ForeignKey(ComponentReferenceMapping.id), nullable=False
@@ -639,13 +638,18 @@ class UniversalReaction(Base):
         first_item = next(iter(sorting_1))
         if first_item[1] > 0:
             comp_dict = {k: -1 * v for k, v in comp_dict.items()}
-        return "/".join(
+        hash_str = "/".join(
             f"{Reaction.coefficient_to_string(coeff)}${cc_id}"
             for cc_id, coeff in sorted(
                 comp_dict.items(),
                 key=itemgetter(0, 1),
             )
         )
+        if len(hash_str) > HASH_STR_MAX_LEN:
+            import hashlib
+
+            hash_str = hashlib.sha256(hash_str.encode()).hexdigest()
+        return hash_str
 
 
 class Reaction(Base):
@@ -684,13 +688,19 @@ class Reaction(Base):
         first_item = next(iter(sorting_1))
         if first_item[1] > 0:
             comp_dict = {k: -1 * v for k, v in comp_dict.items()}
-        return "/".join(
+        hash_str = "/".join(
             f"{Reaction.coefficient_to_string(coeff)}${cc_id}"
             for cc_id, coeff in sorted(
                 comp_dict.items(),
                 key=itemgetter(0, 1),
             )
         )
+
+        if len(hash_str) > HASH_STR_MAX_LEN:
+            import hashlib
+
+            hash_str = hashlib.sha256(hash_str.encode()).hexdigest()
+        return hash_str
 
 
 class UniversalReactionMatrix(Base):

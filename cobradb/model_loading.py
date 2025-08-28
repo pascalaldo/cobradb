@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from cobra.io import write_sbml_model
+from cobradb.curated_reactions import push_reactions
 from cobradb.metabolites import (
     are_explicit_formulae_equivalent,
     create_model_specific_metabolite,
@@ -736,9 +737,8 @@ def _is_deprecated_reaction_id(session, reaction_id):
 
 def compartmentalized_id_to_universal_compartmentalized_id(comp_comp_id):
     try:
-        comp_id, compartment = comp_comp_id.rsplit("_", maxsplit=1)
-        universal_id, _charge = comp_id.rsplit(":", maxsplit=1)
-        return f"{universal_id}_{compartment}"
+        universal_comp_comp_id, _charge = comp_comp_id.rsplit(":", maxsplit=1)
+        return universal_comp_comp_id
     except:
         return comp_comp_id
 
@@ -834,6 +834,7 @@ def load_reactions(
             for m, coeff in reaction.metabolites.items()
         ]
         reaction_hash = Reaction.generate_hash(participants)
+        print(f"reaction hash 0: {reaction_hash}")
 
         # Get the reaction
         reaction_db = (
@@ -853,20 +854,68 @@ def load_reactions(
             universal_reaction_hash = UniversalReaction.generate_hash(
                 universal_participants
             )
+            print(f"universal hash 0: {universal_reaction_hash}")
             universal_reaction_db = (
                 session.query(UniversalReaction)
                 .filter(UniversalReaction.hash == universal_reaction_hash)
                 .first()
             )
-            if universal_reaction_db is None:
-                # TODO: Model-specific reactions
-                continue
-            logging.warn(f"\t UniversalReaction {reaction_id}: {universal_reaction_db}")
-            # TODO: Generate reaction with alternative component variants
+            if universal_reaction_db is not None:
+                logging.warn(
+                    f"\t UniversalReaction {reaction_id}: {universal_reaction_db}"
+                )
+                # TODO: Generate reaction with alternative component variants
+                reaction_data = {
+                    universal_reaction_db.id: {
+                        "name": reaction.name,
+                        "participants": [
+                            [
+                                (abs(coeff), x["compartmentalized_component_id"])
+                                for x in participants
+                                if (coeff := float(x["coefficient"])) < 0
+                            ],
+                            [
+                                (abs(coeff), x["compartmentalized_component_id"])
+                                for x in participants
+                                if (coeff := float(x["coefficient"])) >= 0
+                            ],
+                        ],
+                    }
+                }
+                print("! Creating new reaction variant.")
+                push_reactions(reaction_data, session)
+                session.commit()
+                print(f"reaction hash 3: {reaction_hash}")
+                reaction_db = (
+                    session.query(Reaction).filter(Reaction.id == reaction_hash).first()
+                )
+            else:
+                reaction_data = {
+                    model_specific_id: {
+                        "name": reaction.name,
+                        "participants": [
+                            [
+                                (abs(coeff), x["compartmentalized_component_id"])
+                                for x in participants
+                                if (coeff := float(x["coefficient"])) < 0
+                            ],
+                            [
+                                (abs(coeff), x["compartmentalized_component_id"])
+                                for x in participants
+                                if (coeff := float(x["coefficient"])) >= 0
+                            ],
+                        ],
+                    }
+                }
+                print("! Creating model-specific reaction.")
+                push_reactions(reaction_data, session)
+                session.commit()
+                reaction_db = (
+                    session.query(Reaction).filter(Reaction.id == reaction_hash).first()
+                )
 
         if reaction_db is None:
-            # TODO: Model-specific reactions
-            continue
+            print("ERROR: Reaction was not correctly created.")
 
         logging.warn(f"Reaction {reaction_id}: {reaction_db}")
 

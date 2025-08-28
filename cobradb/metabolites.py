@@ -233,7 +233,7 @@ def create_metabolite(proposed_bigg_id: str, input_chebi: str, session):
         )
         session.add(component_ref_mapping_db)
 
-        if chebi == default_chebi:
+        if chebi == default_chebi or default_chebi is None:
             universal_component_ref_mapping_db = (
                 session.query(UniversalComponentReferenceMapping)
                 .filter(UniversalComponentReferenceMapping.id == proposed_bigg_id)
