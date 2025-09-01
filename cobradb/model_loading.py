@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 
-from cobra.io import write_sbml_model
+from pathlib import Path
+from cobra.io import save_json_model, save_yaml_model, write_sbml_model
 from cobradb.curated_reactions import push_reactions
 from cobradb.metabolites import (
     are_explicit_formulae_equivalent,
+    create_metabolite,
     create_model_specific_metabolite,
     fix_explicit_formula,
 )
@@ -195,9 +197,12 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
 
     session.commit()
 
-    model_output_path = f"/models/test.biggr.sbml"
+    # TODO: Some potential of security issues here. Not a problem as long as the inputs are controlled by maintainers.
+    model_output_path = Path("/models/models/") / model_bigg_id
     logging.warning(f"Writing corrected model to: {model_output_path}")
-    write_sbml_model(model, model_output_path)
+    write_sbml_model(model, model_output_path.with_suffix(".biggr.sbml"))
+    save_json_model(model, model_output_path.with_suffix(".biggr.json"))
+    save_yaml_model(model, model_output_path.with_suffix(".biggr.yaml"))
 
     return model_bigg_id
 
@@ -389,7 +394,6 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
         else:
             new_biggr_id = f"{new_bigg_id}:{charge}"
 
-        # If there is no metabolite, add a new one.
         metabolite_db = (
             session.query(Component).filter(Component.id == new_biggr_id).first()
         )
@@ -409,20 +413,46 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
         # new_name = scrub_name(getattr(metabolite, "name", None))
         # new_name = f"__{model.id}__{new_name}"
         if metabolite_db is None:
-            # make the new metabolite
-            # new_bigg_id = f"__{model.id}__{new_bigg_id}"
-            # new_biggr_id = f"__{model.id}__{new_biggr_id}"
-            _universal_metabolite_id, metabolite_db = create_model_specific_metabolite(
-                bigg_id=new_bigg_id,
-                model_id=model.id,
-                charge=charge,
-                formula=_formula,
-                name="",
-                session=session,
-            )
-            # metabolite_db = Component(id=new_bigg_id, name=new_name)
-            # session.add(metabolite_db)
-            # session.commit()
+            metabolite_created = False
+
+            # model_met_chebis_1 = metabolite.annotation.get("CHEBI", [])
+            # if isinstance(model_met_chebis_1, str):
+            #     model_met_chebis_1 = [model_met_chebis_1]
+            # model_met_chebis_2 = metabolite.annotation.get("chebi", [])
+            # if isinstance(model_met_chebis_2, str):
+            #     model_met_chebis_2 = [model_met_chebis_2]
+            # model_met_chebis = model_met_chebis_1 + model_met_chebis_2
+            #
+            # if model_met_chebis:
+            #     for model_met_chebi in model_met_chebis:
+            #         met_result = create_metabolite(
+            #             new_bigg_id,
+            #             model_met_chebi,
+            #             session,
+            #             assure_present=(0 if charge is None else charge, _formula),
+            #         )
+            #         if met_result.get("status", "error") == "success":
+            #             print("! Metabolite created based on model metabolite.")
+            #             metabolite_created = True
+            #             break
+
+            if not metabolite_created:
+                # make the new metabolite
+                # new_bigg_id = f"__{model.id}__{new_bigg_id}"
+                # new_biggr_id = f"__{model.id}__{new_biggr_id}"
+                _universal_metabolite_id, metabolite_db = (
+                    create_model_specific_metabolite(
+                        bigg_id=new_bigg_id,
+                        model_id=model.id,
+                        charge=charge,
+                        formula=_formula,
+                        name="",
+                        session=session,
+                    )
+                )
+                # metabolite_db = Component(id=new_bigg_id, name=new_name)
+                # session.add(metabolite_db)
+                # session.commit()
         else:
             # If the metabolite is not new, consider improving the descriptive name
             # improve_name(session, metabolite_db, new_name)
@@ -559,12 +589,36 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
         (
             metabolite,
             universal_comp_component_db,
+            comp_comp_db,
+            metabolite_db,
         ) = (
             ctx["metabolite"],
             ctx["universal_comp_component_db"],
+            ctx["comp_component_db"],
+            ctx["metabolite_db"],
         )
         if universal_comp_component_db is not None:
             metabolite.id = universal_comp_component_db.id
+
+        if comp_comp_db is not None and metabolite_db is not None:
+            metabolite.annotation["biggr"] = comp_comp_db.id
+
+            comp_ref_map = (
+                session.query(ComponentReferenceMapping, ReferenceCompound)
+                .join(
+                    ReferenceCompound,
+                    ReferenceCompound.id == ComponentReferenceMapping.reference_id,
+                )
+                .filter(ComponentReferenceMapping.component_id == metabolite_db.id)
+                .all()
+            )
+            if comp_ref_map:
+                chebis = []
+                for crm, ref_comp in comp_ref_map:
+                    if ref_comp.id.startswith("CHEBI:"):
+                        chebis.append(ref_comp.id)
+                if chebis:
+                    metabolite.annotation["chebi"] = chebis
 
     # for metabolite_id, ctx in context.items():
     #     metabolite, comp_component_db, model_comp_comp_db, metabolite_db = (
@@ -812,7 +866,7 @@ def load_reactions(
     #     v: k for k, v in six.iteritems(reverse_reaction_hashes)
     # }
     # reactions_not_to_reverse = set()
-    # for r_id, h in six.iteritems(reaction_hashes):
+    # for r_id, h in six.iteritems(reaction_hashes)f:
     #     if h in reverse_reaction_hashes_rev:
     #         reactions_not_to_reverse.add(r_id)
     #         reactions_not_to_reverse.add(reverse_reaction_hashes_rev[h])
@@ -825,6 +879,9 @@ def load_reactions(
         model_specific_id = reaction.id
         reaction_id = model_specific_id.removeprefix(f"__{model.id}__")
         reaction_id = parse.remove_duplicate_tag(reaction_id)
+
+        # if reaction_id != "EX_glc__D_e" and reaction_id != "EX___iML1515__glc__D_e":
+        #     continue
 
         participants = [
             dict(
@@ -890,8 +947,28 @@ def load_reactions(
                     session.query(Reaction).filter(Reaction.id == reaction_hash).first()
                 )
             else:
+                # Check for exchange reactions
+                is_exchange = False
+                if (
+                    len(participants) == 1
+                    and abs(float(participants[0]["coefficient"])) == 1
+                ):
+                    universal_compartmentalized_component_id = universal_participants[
+                        0
+                    ]["universal_compartmentalized_component_id"]
+                    if reaction_id != f"EX_{universal_compartmentalized_component_id}":
+                        print(f"Wrong name for exchange reaction: {reaction_id}")
+                        reaction_id = f"EX_{universal_compartmentalized_component_id}"
+                    is_exchange = True
+
+                if not is_exchange:
+                    print("! Creating model-specific reaction.")
+                    reaction_id = model_specific_id
+                else:
+                    print("! Creating exchange reaction.")
+
                 reaction_data = {
-                    model_specific_id: {
+                    reaction_id: {
                         "name": reaction.name,
                         "participants": [
                             [
@@ -907,7 +984,6 @@ def load_reactions(
                         ],
                     }
                 }
-                print("! Creating model-specific reaction.")
                 push_reactions(reaction_data, session)
                 session.commit()
                 reaction_db = (
@@ -956,6 +1032,8 @@ def load_reactions(
             else reaction.upper_bound
         )
 
+        # TODO: Flip reaction in model if necessary
+
         # subsystem
         subsystem = check_none(reaction.subsystem.strip())
 
@@ -967,7 +1045,7 @@ def load_reactions(
         ) + 1
 
         reaction.id = (
-            reaction_id if copy_number == 1 else f"{reaction_id}:{copy_number}"
+            reaction_db.id if copy_number == 1 else f"{reaction_db.id}:{copy_number}"
         )
 
         # make a new reaction

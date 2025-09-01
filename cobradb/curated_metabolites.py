@@ -8,6 +8,7 @@ from sqlalchemy import func
 import re
 import logging
 import json
+from libchebipy import ChebiEntity
 
 import time
 
@@ -53,6 +54,28 @@ def push_metabolites(data, session):
             continue
 
         metabolites.create_metabolite(bid, bid_info["chebis"][0], session)
+
+    for old_id, new_id in data.get("bigg_id_mapping", {}).items():
+        id_mapping_db = (
+            session.query(ComponentIDMapping)
+            .filter(ComponentIDMapping.old_id == old_id)
+            .first()
+        )
+        if id_mapping_db is not None:
+            continue
+        new_component_db = (
+            session.query(UniversalComponent.id)
+            .filter(UniversalComponent.id == new_id)
+            .first()
+        )
+        if new_component_db is None:
+            continue
+        id_mapping_db = ComponentIDMapping(
+            old_id=old_id,
+            new_id=new_id,
+        )
+        session.add(id_mapping_db)
+    session.commit()
 
     # for bid, bid_info in data["bigg_ids"].items():
     #     if "##" in bid:

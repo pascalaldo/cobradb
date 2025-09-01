@@ -64,6 +64,33 @@ def create_hierarchical_conversion_reaction(lhs_chebi, rhs_chebi, session):
 CHEBI_PROTONATION_RELATIONS = ["is_conjugate_acid_of", "is_conjugate_base_of"]
 
 
+def add_reference_exchange_reactions(compound_db, session):
+    reaction_id = f"EX:{compound_db.id}"
+    reference_reaction_db = (
+        session.query(ReferenceReaction)
+        .filter(ReferenceReaction.id == reaction_id)
+        .first()
+    )
+    if reference_reaction_db is not None:
+        return
+    compound_name = compound_db.name if compound_db.name else compound_db.id
+    reference_reaction_db = ReferenceReaction(
+        id=reaction_id,
+        name=f"Exchange of {compound_name}.",
+        equation=f"{compound_name} = ∅",
+    )
+    session.add(reference_reaction_db)
+    lhs_part = ReferenceReactionParticipant(
+        reaction_id=reaction_id,
+        compound_id=compound_db.id,
+        side="L",
+        coefficient="1",
+        compartment="0",
+    )
+    session.add(lhs_part)
+    session.commit()
+
+
 def add_reference_conversion_reactions(compound_db, session):
     if not compound_db.id.startswith("CHEBI:"):
         return
@@ -227,6 +254,7 @@ def push_rhea_reference(rhea_db, session):
             session.add(reactive_part_matrix_db)
         session.commit()
         add_reference_conversion_reactions(compound_db, session)
+        add_reference_exchange_reactions(compound_db, session)
     session.commit()
     for rx_id, reaction in rhea_db["reactions"].items():
         reaction_db = ReferenceReaction(

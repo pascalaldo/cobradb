@@ -63,7 +63,7 @@ def match_reaction_data_with_db_entry(parsed_participants, db_entry, session):
     for (
         participant,
         compound,
-    ) in participants_db:
+    ) in participants_db.all():
         requires_n = "n" in str(participant.coefficient).lower()
 
         # print(f"Participant: {participant} -> {compound}")
@@ -82,8 +82,6 @@ def match_reaction_data_with_db_entry(parsed_participants, db_entry, session):
             )
             .join(Component, Component.id == ComponentReferenceMapping.component_id)
         )
-        # print(stmt)
-        # print(compound.id)
         participant_mappings = []
         crmappings_db = session.execute(stmt)
         for crmapping, universal_component, component in crmappings_db:
@@ -93,13 +91,12 @@ def match_reaction_data_with_db_entry(parsed_participants, db_entry, session):
             if requires_n:
                 coefficient = coefficient.lower().replace("n", crmapping.reference_n)
             coefficient = float(coefficient)
-            # print(f" {crmapping}: {universal_component}")
             ms = [
                 p
                 for p in parsed_participants
                 if p[2] == universal_component.id
                 and float(p[0]) == coefficient
-                and ((p[4] == component.charge) or p[4] is None)
+                and ((p[4] is None) or (float(p[4]) == component.charge))
             ]
             if not ms:
                 continue

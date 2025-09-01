@@ -147,9 +147,11 @@ def is_bigg_id_valid(proposed_bigg_id):
     return bool(BIGG_ID_PATTERN.fullmatch(proposed_bigg_id) is not None)
 
 
-def create_metabolite(proposed_bigg_id: str, input_chebi: str, session):
+def create_metabolite(
+    proposed_bigg_id: str, input_chebi: str, session, assure_present=None
+):
     if not is_bigg_id_valid(proposed_bigg_id):
-        return {"status": "invalid bigg id"}
+        return {"status": "error", "message": "invalid bigg id"}
 
     old_id_db = (
         session.query(ComponentIDMapping)
@@ -157,7 +159,11 @@ def create_metabolite(proposed_bigg_id: str, input_chebi: str, session):
         .first()
     )
     if old_id_db:
-        return {"status": "bigg id is a deprecated id", "new_id": old_id_db.new_id}
+        return {
+            "status": "error",
+            "message": "bigg id is a deprecated id",
+            "new_id": old_id_db.new_id,
+        }
 
     universal_component_db = (
         session.query(UniversalComponent)
@@ -165,19 +171,20 @@ def create_metabolite(proposed_bigg_id: str, input_chebi: str, session):
         .first()
     )
     if universal_component_db:
-        return {"status": "bigg id already exists"}
+        return {"status": "error", "message": "bigg id already exists"}
 
     all_chebis = get_related_chebis(input_chebi)
     all_chebis = list(all_chebis.keys())
 
     component_ref_mapping_db = (
         session.query(ComponentReferenceMapping)
-        .filter(ComponentReferenceMapping.universal_id in all_chebis)
+        .filter(ComponentReferenceMapping.reference_id in all_chebis)
         .first()
     )
     if component_ref_mapping_db:
         return {
-            "status": "chebi already associated",
+            "status": "error",
+            "message": "chebi already associated",
             "chebi": component_ref_mapping_db.reference_id,
             "bigg_id": component_ref_mapping_db.universal_id,
         }
@@ -185,6 +192,18 @@ def create_metabolite(proposed_bigg_id: str, input_chebi: str, session):
     references_db = {
         x: get_or_create_small_molecule_reference(x, session)[1] for x in all_chebis
     }
+
+    if assure_present:
+        assure_charge, assure_formula = assure_present
+        if not any(
+            (float(str(ref.charge)) == assure_charge)
+            and are_explicit_formulae_equivalent(ref.formula, assure_formula)
+            for ref in references_db.values()
+        ):
+            return {
+                "status": "error",
+                "message": "charge + formula combination not present",
+            }
 
     default_chebi = DEFAULT_CHEBI_MAPPING.get(input_chebi)
     if default_chebi not in references_db:
