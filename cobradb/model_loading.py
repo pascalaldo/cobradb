@@ -200,9 +200,10 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
     # TODO: Some potential of security issues here. Not a problem as long as the inputs are controlled by maintainers.
     model_output_path = Path("/models/models/") / model_bigg_id
     logging.warning(f"Writing corrected model to: {model_output_path}")
-    write_sbml_model(model, model_output_path.with_suffix(".biggr.sbml"))
-    save_json_model(model, model_output_path.with_suffix(".biggr.json"))
-    save_yaml_model(model, model_output_path.with_suffix(".biggr.yaml"))
+    for gz in ["", ".gz"]:
+        write_sbml_model(model, model_output_path.with_suffix(f".biggr.sbml{gz}"))
+        save_json_model(model, model_output_path.with_suffix(f".biggr.json{gz}"))
+        save_yaml_model(model, model_output_path.with_suffix(f".biggr.yaml{gz}"))
 
     return model_bigg_id
 

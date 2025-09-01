@@ -348,7 +348,9 @@ class Model(Base):
     )
     organism = Column(String(200), nullable=True)
     published_filename = Column(String, nullable=True)
-    date_modified = Column(DateTime(timezone=True), onupdate=func.now())
+    date_modified = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
     def __repr__(self):
         return "<cobradb Model(id={self.id}, bigg_id={self.bigg_id})>".format(self=self)
