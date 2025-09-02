@@ -18,4 +18,5 @@ configparser>=7.1.0,<7.2.0
 six
 rdflib
 libChEBIpy
+click
 memote==0.17.0
