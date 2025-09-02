@@ -75,8 +75,16 @@ _enum_l = [
         name="compound_type",
     ),
     Enum("L", "R", name="reaction_side"),
+    Enum("passed", "failed", "skipped", name="test_result"),
 ]
 custom_enums = {x.name: x for x in _enum_l}
+
+COMPOUND_TYPE_TO_SBO = {
+    "small_molecule": "SBO:0000247",
+    "generic_polypeptide": "SBO:0000252",
+    "generic_polynucleotide": "SBO:0000246",
+    "polymer": "SBO:0000248",
+}
 
 # ------------
 # Exceptions
@@ -88,7 +96,9 @@ class NotFoundError(Exception):
 
 
 class AlreadyLoadedError(Exception):
-    pass
+    def __init__(self, message, bigg_id=None):
+        super().__init__(message)
+        self.bigg_id = bigg_id
 
 
 # --------
@@ -174,6 +184,9 @@ class ReferenceCompound(Base):
     compound_type = Column(custom_enums["compound_type"], nullable=False)
     charge = Column(COL_CHARGE_STR, nullable=True)
     formula = Column(COL_FORMULA_STR, nullable=True)
+
+    def get_sbo(self):
+        return COMPOUND_TYPE_TO_SBO.get(str(self.compound_type), "small_molecule")
 
     def __repr__(self):
         return (
@@ -627,6 +640,25 @@ class UniversalReaction(Base):
 
     # __mapper_args__ = {"polymorphic_identity": "reaction", "polymorphic_on": type}
 
+    def get_sbo(self):
+        bare_id = str(self.id)
+        if bare_id.startswith("__"):
+            bare_id = bare_id[2:]
+            if "__" in bare_id:
+                _model, bare_id = bare_id.split("__", maxsplit=1)
+            else:
+                bare_id = str(self.id)
+        if bare_id.startswith("EX_"):
+            return "SBO:0000627"
+        if bare_id.startswith("SK_"):
+            return "SBO:0000632"
+        if bare_id.startswith("DM_"):
+            return "SBO:0000628"
+        if bare_id.startswith("BIOMASS"):
+            return "SBO:0000629"
+
+        return "SBO:0000176"
+
     def __repr__(self):
         return "<cobradb Reaction(id=%s)>" % (self.id,)
 
@@ -751,3 +783,33 @@ class ComponentIDMapping(Base):
 
     old_id = Column(COL_ID_STR, primary_key=True)
     new_id = Column(COL_ID_STR, ForeignKey(UniversalComponent.id), nullable=False)
+
+
+# MEMOTE-related models
+class MemoteTest(Base):
+    __tablename__ = "memote_test"
+
+    id = Column(COL_ID_STR, primary_key=True)
+    name = Column(COL_NAME_STR, nullable=False)
+    summary = Column(String(10000), nullable=True)
+    format_type = Column(String(20), nullable=False)
+
+
+class MemoteResult(Base):
+    __tablename__ = "memote_result"
+
+    id = Column(Integer(), primary_key=True)
+    model_id = Column(COL_ID_STR, ForeignKey(Model.id), nullable=False)
+    test_id = Column(COL_ID_STR, ForeignKey(MemoteTest.id), nullable=False)
+
+    model_reaction_id = Column(Integer, ForeignKey(ModelReaction.id), nullable=True)
+    model_component_id = Column(
+        Integer, ForeignKey(ModelCompartmentalizedComponent.id), nullable=True
+    )
+    model_gene_id = Column(Integer, ForeignKey(ModelGene.id), nullable=True)
+
+    message = Column(String(10000), nullable=True)
+    data = Column(Float(), nullable=True)
+    duration = Column(Float(), nullable=True)
+    metric = Column(Float(), nullable=True)
+    result = Column(custom_enums["test_result"], nullable=True)

@@ -17,6 +17,7 @@ from cobradb.rhea import load_rhea
 from cobradb.curated_metabolites import load_bigg_ids
 from cobradb.model_loading import load_model
 from cobradb.version_loading import load_version_date
+from cobradb.memote import load_memote_results, run_memote
 
 import argparse
 
@@ -33,6 +34,11 @@ parser.add_argument(
 parser.add_argument("--drop-maps", help="Empty map data", action="store_true")
 parser.add_argument("--skip-genomes", help="Skip genome loading", action="store_true")
 parser.add_argument("--skip-models", help="Skip model loading", action="store_true")
+parser.add_argument(
+    "--skip-memote",
+    help="Skip memote execution and result loading",
+    action="store_true",
+)
 parser.add_argument("--skip-maps", help="Skip map loading", action="store_true")
 parser.add_argument("--skip-rhea", help="Skip RHEA loading", action="store_true")
 parser.add_argument(
@@ -231,8 +237,9 @@ def main():
                     i + 1, n, model_dict["model_filename"]
                 )
             )
+            model_bigg_id = None
             try:
-                load_model(
+                model_bigg_id = load_model(
                     model_dir / model_dict["model_filename"],
                     model_dict["pub_ref"],
                     model_dict["genome_ref"],
@@ -240,12 +247,33 @@ def main():
                 )
             except AlreadyLoadedError as e:
                 logging.info(str(e))
+                model_bigg_id = e.bigg_id
             except Exception as e:
                 print(
                     f"model_dir: '{model_dir}', model_path: '{model_dir / model_dict['model_filename']}'"
                 )
                 logging.error("Could not load model %s." % model_dict["model_filename"])
                 logging.exception(e)
+
+            if not args.skip_memote and model_bigg_id is not None:
+                model_biggr_filename = f"/models/models/{model_bigg_id}.biggr.sbml"
+                memote_result_filename = f"/models/memote/{model_bigg_id}.biggr.json.gz"
+
+                run_memote(model_biggr_filename, memote_result_filename)
+
+                try:
+                    load_memote_results(
+                        model_bigg_id,
+                        memote_result_filename,
+                        session,
+                    )
+                except Exception as e:
+                    logging.error(
+                        "Could not load memote results %s."
+                        % model_dict["model_filename"]
+                    )
+                    logging.exception(e)
+
         timings["load_models"] = time.time() - f_start_time
 
     timings["total"] = time.time() - start_time
