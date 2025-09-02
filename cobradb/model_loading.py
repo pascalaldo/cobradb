@@ -114,7 +114,9 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
 
     # check that the model doesn't already exist
     if session.query(Model).filter_by(id=model_bigg_id).count() > 0:
-        raise AlreadyLoadedError("Model %s already loaded" % model_bigg_id)
+        raise AlreadyLoadedError(
+            "Model %s already loaded" % model_bigg_id, model_bigg_id
+        )
 
     # check for a genome annotation for this model
     if genome_ref is not None and genome_ref[0] == "organism":
@@ -603,6 +605,7 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
 
         if comp_comp_db is not None and metabolite_db is not None:
             metabolite.annotation["biggr"] = comp_comp_db.id
+            metabolite.annotation["sbo"] = "SBO:0000247"
 
             comp_ref_map = (
                 session.query(ComponentReferenceMapping, ReferenceCompound)
@@ -618,6 +621,8 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
                 for crm, ref_comp in comp_ref_map:
                     if ref_comp.id.startswith("CHEBI:"):
                         chebis.append(ref_comp.id)
+                    metabolite.annotation["sbo"] = ref_comp.get_sbo()
+
                 if chebis:
                     metabolite.annotation["chebi"] = chebis
 
@@ -1040,14 +1045,34 @@ def load_reactions(
 
         copy_number = (
             session.query(ModelReaction)
-            .filter(ModelReaction.reaction_id == reaction_db.id)
+            .join(Reaction, Reaction.id == ModelReaction.reaction_id)
+            .filter(Reaction.universal_id == reaction_db.universal_id)
             .filter(ModelReaction.model_id == model_db_id)
             .count()
         ) + 1
 
         reaction.id = (
-            reaction_db.id if copy_number == 1 else f"{reaction_db.id}:{copy_number}"
+            reaction_db.universal_id
+            if copy_number == 1
+            else f"{reaction_db.universal_id}:{copy_number}"
         )
+
+        uni_ref_db = (
+            session.query(UniversalReaction, ReferenceReaction)
+            .outerjoin(
+                ReferenceReaction,
+                UniversalReaction.reference_id == ReferenceReaction.id,
+            )
+            .filter(UniversalReaction.id == reaction_db.universal_id)
+            .first()
+        )
+        reaction.annotation["sbo"] = "SBO:0000176"
+        if uni_ref_db is not None:
+            universal_db, reference_db = uni_ref_db
+            reaction.annotation["sbo"] = universal_db.get_sbo()
+            if reference_db is not None:
+                if reference_db.id.startswith("RHEA:"):
+                    reaction.annotation["rhea"] = reference_db.id
 
         # make a new reaction
         model_reaction_db = ModelReaction(

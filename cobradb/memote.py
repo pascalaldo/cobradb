@@ -1,0 +1,259 @@
+from collections.abc import Mapping
+import gzip
+import json
+import cobra
+import memote.suite.api as api
+from memote.suite.results import ResultManager
+
+from cobradb.models import (
+    AlreadyLoadedError,
+    CompartmentalizedComponent,
+    MemoteResult,
+    MemoteTest,
+    ModelCompartmentalizedComponent,
+    ModelReaction,
+    Reaction,
+)
+
+TEST_TYPES = {
+    "test_absolute_extreme_coefficient_ratio": "general",
+    "test_biomass_consistency": "per_reaction",
+    "test_biomass_default_production": "per_reaction",
+    "test_biomass_open_production": "per_reaction",
+    # "test_biomass_precursors_default_production": "per_reaction_count_metabolite",
+    # "test_biomass_precursors_open_production": "per_reaction_count_metabolite",
+    "test_biomass_presence": "count_reaction",
+    "test_biomass_specific_sbo_presence": "general",
+    "test_blocked_reactions": "count_reaction",
+    # "test_compartments_presence": "compartment_count",
+    "test_degrees_of_freedom": "general",
+    "test_demand_specific_sbo_presence": "count_reaction",
+    # "test_detect_energy_generating_cycles": "TODO",
+    # "test_direct_metabolites_in_biomass": "per_reaction_count_metabolite",
+    # "test_essential_precursors_not_in_biomass": "per_reaction_count_metabolite_MNX?",
+    "test_exchange_specific_sbo_presence": "count_reaction",
+    "test_fast_growth_default": "per_reaction",
+    "test_fbc_presence": "general",
+    # "test_find_constrained_pure_metabolic_reactions": "TODO",
+    "test_find_constrained_transport_reactions": "count_reaction",
+    "test_find_deadends": "count_metabolite",
+    "test_find_disconnected": "count_metabolite",
+    "test_find_duplicate_metabolites_in_compartments": "count_metabolite",
+    "test_find_duplicate_reactions": "count_reaction",
+    "test_find_medium_metabolites": "count_metabolite",
+    "test_find_metabolites_not_consumed_with_open_bounds": "count_metabolite",
+    "test_find_metabolites_not_produced_with_open_bounds": "count_metabolite",
+    "test_find_orphans": "count_metabolite",
+    "test_find_pure_metabolic_reactions": "count_reaction",
+    # "test_find_reactions_with_identical_genes": "TODO",
+    # "test_find_reactions_with_partially_identical_annotations": "TODO",
+    "test_find_reversible_oxygen_reactions": "count_reaction",
+    "test_find_stoichiometrically_balanced_cycles": "count_reaction",
+    "test_find_transport_reactions": "count_reaction",
+    # "test_find_unique_metabolites": "count_metabolite", (NO compartment)
+    "test_gam_in_biomass": "per_reaction",
+    # "test_gene_essentiality_from_data_qualitative": "TODO",
+    # "test_gene_product_annotation_overview": "TODO",
+    # "test_gene_product_annotation_presence": "TODO",
+    # "test_gene_product_annotation_wrong_ids": "TODO",
+    "test_gene_protein_reaction_rule_presence": "count_reaction",
+    # "test_gene_sbo_presence": "count_gene",
+    # "test_gene_specific_sbo_presence": "count_gene",
+    # "test_genes_presence": "count_gene",
+    # "test_growth_from_data_qualitative": "TODO",
+    "test_inconsistent_min_stoichiometry": "count_metabolite",
+    "test_matrix_rank": "general",
+    # "test_metabolic_coverage": "TODO",
+    "test_metabolic_reaction_specific_sbo_presence": "count_reaction",
+    # "test_metabolite_annotation_overview": "TODO",
+    "test_metabolite_annotation_presence": "count_metabolite",
+    # "test_metabolite_annotation_wrong_ids": "TODO",
+    "test_metabolite_id_namespace_consistency": "count_metabolite",
+    "test_metabolite_sbo_presence": "count_metabolite",
+    "test_metabolite_specific_sbo_presence": "count_metabolite",
+    "test_metabolites_charge_presence": "count_metabolite",
+    "test_metabolites_formula_presence": "count_metabolite",
+    "test_metabolites_presence": "count_metabolite",
+    # "test_model_id_presence": "general",
+    "test_ngam_presence": "count_reaction",
+    "test_number_independent_conservation_relations": "general",
+    "test_protein_complex_presence": "count_reaction",
+    # "test_reaction_annotation_overview": "TODO",
+    "test_reaction_annotation_presence": "count_reaction",
+    # "test_reaction_annotation_wrong_ids": "TODO",
+    "test_reaction_charge_balance": "count_reaction",
+    "test_reaction_id_namespace_consistency": "count_reaction",
+    "test_reaction_mass_balance": "count_reaction",
+    "test_reaction_sbo_presence": "count_reaction",
+    "test_reactions_presence": "count_reaction",
+    # "test_sbml_level": "general (STRING)",
+    "test_sink_specific_sbo_presence": "count_reaction",
+    "test_stoichiometric_consistency": "general",
+    "test_transport_reaction_gpr_presence": "count_reaction",
+    "test_transport_reaction_specific_sbo_presence": "count_reaction",
+    "test_unconserved_metabolites": "count_metabolite",
+}
+
+
+def run_memote(model_filename, result_filename):
+    config = cobra.Configuration()
+    config.solver = "glpk"
+
+    # Check if the model can be loaded at all.
+    model, sbml_ver, notifications = api.validate_model(model_filename)
+    if model is None:
+        raise Exception(
+            "The model could not be loaded due to the following SBML errors."
+        )
+
+    code, result = api.test_model(
+        model=model,
+        sbml_version=sbml_ver,
+        results=True,
+        solver_timeout=10,
+    )
+
+    manager = ResultManager()
+    manager.store(result, filename=result_filename)
+
+
+def load_memote_results(model_bigg_id, filename, session):
+    print(f"Loading memote results for {model_bigg_id}")
+
+    with gzip.open(filename, "rb") as f:
+        results = json.load(f)
+
+    existing_result_db = (
+        session.query(MemoteResult)
+        .filter(MemoteResult.model_id == model_bigg_id)
+        .first()
+    )
+    if existing_result_db is not None:
+        raise AlreadyLoadedError(
+            f"There are already Memote results for {model_bigg_id} in the database",
+            bigg_id=model_bigg_id,
+        )
+
+    for test_func, test_result in results["tests"].items():
+        test_id = test_func
+        test_type = TEST_TYPES.get(test_id)
+        if test_type is None:
+            continue
+
+        test_db = session.query(MemoteTest).filter(MemoteTest.id == test_id).first()
+        if test_db is None:
+            test_db = MemoteTest(
+                id=test_id,
+                name=test_result["title"],
+                summary=test_result.get("summary"),
+                format_type=test_result["format_type"],
+            )
+            session.add(test_db)
+            session.commit()
+
+        general_result = {
+            "model_id": model_bigg_id,
+            "test_id": test_db.id,
+        }
+        specific_results = {}
+
+        for prop in ["data", "duration", "metric", "result", "message"]:
+            prop_val = test_result.get(prop)
+            if prop_val is None:
+                continue
+            if isinstance(prop_val, (int, float)):
+                general_result[prop] = float(prop_val)
+            elif isinstance(prop_val, str):
+                general_result[prop] = prop_val
+            elif isinstance(prop_val, bool):
+                general_result[prop] = 1.0 if prop_val else 0.0
+            elif (is_dict := isinstance(prop_val, dict)) or isinstance(prop_val, list):
+                for k in prop_val:
+                    if k not in specific_results:
+                        specific_results[k] = {
+                            "model_id": model_bigg_id,
+                            "test_id": test_db.id,
+                        }
+                    if test_type in ["per_reaction", "count_reaction"]:
+                        universal_reaction_id = k
+                        copy_number = 1
+                        if ":" in universal_reaction_id:
+                            universal_reaction_id, copy_number = (
+                                universal_reaction_id.rsplit(":", maxsplit=1)
+                            )
+                            copy_number = int(copy_number)
+                        model_reaction_db = (
+                            session.query(ModelReaction)
+                            .join(Reaction, Reaction.id == ModelReaction.reaction_id)
+                            .filter(
+                                (Reaction.universal_id == universal_reaction_id)
+                                & (ModelReaction.copy_number == copy_number)
+                                & (ModelReaction.model_id == model_bigg_id)
+                            )
+                            .first()
+                        )
+                        if model_reaction_db is None:
+                            print(f"Reaction not found: {k}")
+                            continue
+                        specific_results[k]["model_reaction_id"] = model_reaction_db.id
+                    elif test_type in ["per_metabolite", "count_metabolite"]:
+                        metabolite_id = k
+                        if ":" in metabolite_id:
+                            model_comp_comp_db = (
+                                session.query(ModelCompartmentalizedComponent)
+                                .join(
+                                    CompartmentalizedComponent,
+                                    CompartmentalizedComponent.id
+                                    == ModelCompartmentalizedComponent.compartmentalized_component_id,
+                                )
+                                .filter(
+                                    (CompartmentalizedComponent.id == metabolite_id)
+                                    & (
+                                        ModelCompartmentalizedComponent.model_id
+                                        == model_bigg_id
+                                    )
+                                )
+                                .first()
+                            )
+                        else:
+                            model_comp_comp_db = (
+                                session.query(ModelCompartmentalizedComponent)
+                                .join(
+                                    CompartmentalizedComponent,
+                                    CompartmentalizedComponent.id
+                                    == ModelCompartmentalizedComponent.compartmentalized_component_id,
+                                )
+                                .filter(
+                                    (
+                                        CompartmentalizedComponent.universal_id
+                                        == metabolite_id
+                                    )
+                                    & (
+                                        ModelCompartmentalizedComponent.model_id
+                                        == model_bigg_id
+                                    )
+                                )
+                                .first()
+                            )
+                        if model_comp_comp_db is None:
+                            print(f"Metabolite not found: {k}")
+                            continue
+                        specific_results[k][
+                            "model_component_id"
+                        ] = model_comp_comp_db.id
+                    else:
+                        print(f"Type of test currently not implemented: {test_type}")
+
+                    if is_dict:
+                        if prop in ["data", "metric", "duration"]:
+                            specific_results[k][prop] = float(prop_val[k])
+                        else:
+                            specific_results[k][prop] = prop_val[k]
+
+        general_result = MemoteResult(**general_result)
+        session.add(general_result)
+
+        for res in specific_results.values():
+            res_db = MemoteResult(**res)
+            session.add(res_db)
+        session.commit()
