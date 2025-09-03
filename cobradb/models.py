@@ -392,7 +392,7 @@ class ModelReaction(Base):
 
     id = Column(Integer, primary_key=True)
     reaction_id = Column(
-        COL_HASH_STR,
+        Integer,
         ForeignKey("reaction.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
@@ -416,6 +416,13 @@ class ModelReaction(Base):
         return "<cobradb ModelCeaction(id={self.id}, reaction_id={self.reaction_id}, model_id={self.model_id}, copy_number={self.copy_number})>".format(
             self=self
         )
+
+    def interpret_id(bigg_id):
+        copy_number = 1
+        if ":" in bigg_id:
+            bigg_id, copy_number = bigg_id.rsplit(":", maxsplit=1)
+            copy_number = int(copy_number)
+        return bigg_id, copy_number
 
 
 class GeneReactionMatrix(Base):
@@ -691,9 +698,13 @@ class UniversalReaction(Base):
 class Reaction(Base):
     __tablename__ = "reaction"
 
-    id = Column(COL_HASH_STR, primary_key=True, nullable=False)
+    id = Column(Integer, primary_key=True)
+    hash = Column(COL_HASH_STR, nullable=False)
+    model_id = Column(COL_ID_STR, ForeignKey(Model.id), nullable=True)
 
     universal_id = Column(COL_ID_STR, ForeignKey(UniversalReaction.id), nullable=False)
+
+    __table_args__ = (UniqueConstraint("hash", "model_id"),)
 
     def __repr__(self):
         return "<cobradb Reaction(id=%s)>" % (self.id,)
@@ -765,7 +776,7 @@ class UniversalReactionMatrix(Base):
 class ReactionMatrix(Base):
     __tablename__ = "reaction_matrix"
     id = Column(Integer, primary_key=True)
-    reaction_id = Column(COL_HASH_STR, ForeignKey(Reaction.id), nullable=False)
+    reaction_id = Column(Integer, ForeignKey(Reaction.id), nullable=False)
     reaction_matrix_id = Column(
         Integer, ForeignKey(UniversalReactionMatrix.id), nullable=False
     )
