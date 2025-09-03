@@ -316,6 +316,9 @@ def push_reactions(data, session):
         #     logging.warn(f"Universal reaction already exists: {bigg_id}.")
         #     continue
         #
+
+        reaction_model_id = reaction_data.get("model_id")
+
         universal_reaction_matrix_info = []
         reaction_matrix_info = []
 
@@ -596,14 +599,22 @@ def push_reactions(data, session):
         reaction_hash = Reaction.generate_hash(reaction_matrix_info)
         print(f"reaction hash 2: {reaction_hash}")
         reaction_db = (
-            session.query(Reaction).filter(Reaction.id == reaction_hash).first()
+            session.query(Reaction)
+            .filter(
+                (Reaction.hash == reaction_hash)
+                & (Reaction.model_id == reaction_model_id)
+            )
+            .first()
         )
         if not reaction_db:
             print("Creating new reaction")
             reaction_db = Reaction(
-                id=reaction_hash, universal_id=universal_reaction_db.id
+                hash=reaction_hash,
+                model_id=reaction_model_id,
+                universal_id=universal_reaction_db.id,
             )
             session.add(reaction_db)
+            session.commit()
             for rm in reaction_matrix_info:
                 reaction_matrix_db = ReactionMatrix(
                     reaction_id=reaction_db.id,

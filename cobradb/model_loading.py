@@ -718,83 +718,6 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
     return comp_comp_db_ids, final_metabolite_ids
 
 
-def _new_reaction(
-    session,
-    reaction,
-    bigg_id,
-    reaction_hash,
-    is_pseudoreaction,
-):
-    """Add a new universal reaction with reaction matrix rows."""
-
-    # name is optional in cobra 0.4b2. This will probably change back.
-    name = check_none(getattr(reaction, "name", None))
-    reaction_db = Reaction(
-        id=bigg_id,
-        name=scrub_name(name),
-        reaction_hash=reaction_hash,
-        pseudoreaction=is_pseudoreaction,
-    )
-    session.add(reaction_db)
-    # session.commit()
-    return reaction_db
-
-
-def _new_reaction_add_metabolites(
-    session,
-    reaction,
-    reaction_db,
-    model,
-    comp_comp_db_ids,
-):
-
-    # for each reactant, add to the reaction matrix
-    for metabolite, stoich in six.iteritems(reaction.metabolites):
-        stoich = float(stoich)
-        # get the component in the model
-        try:
-            comp_comp_db_id = comp_comp_db_ids[metabolite.id]
-        except KeyError:
-            logging.error(
-                "Could not find metabolite {!s} for model {!s} in the database".format(
-                    metabolite.id, model.id
-                )
-            )
-            continue
-
-        # check if the reaction matrix row already exists
-        found_reaction_matrix = (
-            session.query(ReactionMatrix)
-            .filter(ReactionMatrix.reaction_id == reaction_db.id)
-            .filter(ReactionMatrix.compartmentalized_component_id == comp_comp_db_id)
-            .count()
-            > 0
-        )
-        if not found_reaction_matrix:
-            new_object = ReactionMatrix(
-                reaction_id=reaction_db.id,
-                compartmentalized_component_id=comp_comp_db_id,
-                stoichiometry=stoich,
-            )
-            session.add(new_object)
-        else:
-            logging.debug(
-                "ReactionMatrix row already present for model {!s} metabolite {!s} reaction {!s}".format(
-                    model.id, metabolite.id, reaction_db.id
-                )
-            )
-
-
-def _is_deprecated_reaction_id(session, reaction_id):
-    return (
-        session.query(DeprecatedID)
-        .filter(DeprecatedID.type == "reaction")
-        .filter(DeprecatedID.deprecated_id == reaction_id)
-        .first()
-        is not None
-    )
-
-
 def compartmentalized_id_to_universal_compartmentalized_id(comp_comp_id):
     try:
         universal_comp_comp_id, _charge = comp_comp_id.rsplit(":", maxsplit=1)
@@ -901,7 +824,12 @@ def load_reactions(
 
         # Get the reaction
         reaction_db = (
-            session.query(Reaction).filter(Reaction.id == reaction_hash).first()
+            session.query(Reaction)
+            .filter(
+                (Reaction.hash == reaction_hash)
+                & ((Reaction.model_id == None) | (Reaction.model_id == model.id))
+            )
+            .first()
         )
 
         if reaction_db is None:
@@ -967,9 +895,11 @@ def load_reactions(
                         reaction_id = f"EX_{universal_compartmentalized_component_id}"
                     is_exchange = True
 
+                reaction_model_id = None
                 if not is_exchange:
                     print("! Creating model-specific reaction.")
                     reaction_id = model_specific_id
+                    reaction_model_id = model.id
                 else:
                     print("! Creating exchange reaction.")
 
@@ -988,12 +918,21 @@ def load_reactions(
                                 if (coeff := float(x["coefficient"])) >= 0
                             ],
                         ],
+                        "model_id": reaction_model_id,
                     }
                 }
                 push_reactions(reaction_data, session)
                 session.commit()
                 reaction_db = (
-                    session.query(Reaction).filter(Reaction.id == reaction_hash).first()
+                    session.query(Reaction)
+                    .filter(
+                        (Reaction.hash == reaction_hash)
+                        & (
+                            (Reaction.model_id == None)
+                            | (Reaction.model_id == model.id)
+                        )
+                    )
+                    .first()
                 )
 
         if reaction_db is None:
@@ -1250,11 +1189,20 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
     for reaction in model.reactions:
         # find the ModelReaction that corresponds to this particular reaction in
         # the model
-        if reaction.id not in model_db_rxn_ids:
-            continue
-        model_reaction_db = session.query(ModelReaction).get(
-            model_db_rxn_ids[reaction.id]
+        # if reaction.id not in model_db_rxn_ids:
+        #     continue
+        universal_reaction_id, copy_number = ModelReaction.interpret_id(reaction.id)
+        model_reaction_db = (
+            session.query(ModelReaction)
+            .join(Reaction, Reaction.id == ModelReaction.reaction_id)
+            .filter(
+                (Reaction.universal_id == universal_reaction_id)
+                & (ModelReaction.copy_number == copy_number)
+                & (ModelReaction.model_id == model.id)
+            )
+            .first()
         )
+
         if model_reaction_db is None:
             logging.error(
                 "Could not find ModelReaction {} for {} in model {}. Cannot load GeneReactionMatrix entries".format(
