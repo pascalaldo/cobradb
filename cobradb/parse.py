@@ -325,6 +325,18 @@ def add_duplicate_tag(the_id):
     return "%s$$DROP" % the_id
 
 
+def split_id_and_copy_tag(the_id):
+    # New style copy tag
+    if ":" in the_id:
+        new_id, copy_number = the_id.rsplit(":", maxsplit=1)
+    elif "_copy" in the_id:
+        new_id, copy_number = the_id.rsplit("_copy", maxsplit=1)
+    else:
+        new_id = the_id
+        copy_number = 1
+    return new_id, int(copy_number)
+
+
 def convert_ids(model):
     """Converts metabolite and reaction ids to the new style.
 

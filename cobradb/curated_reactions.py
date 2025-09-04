@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 
+from sqlalchemy.orm import aliased
 from cobradb.models import *
 from cobradb import settings
 from cobradb.util import timing
 
-from sqlalchemy import func
+from sqlalchemy import cast, func
 from sqlalchemy import select
 import re
 import logging
@@ -230,34 +231,65 @@ def find_reference_reaction(proposed_ids, parsed_participants, session):
 
     if reference_db is None:
         db_entries = None
+        stmt = session.query(ReferenceReaction)
+
         for parsed_participant in parsed_participants:
-            new_db_entries = (
-                session.query(ReferenceReaction)
-                .join(
-                    ReferenceReactionParticipant,
-                    ReferenceReactionParticipant.reaction_id == ReferenceReaction.id,
+            rrp_alias = aliased(ReferenceReactionParticipant)
+            crm_alias = aliased(ComponentReferenceMapping)
+            stmt = (
+                stmt.join(
+                    rrp_alias,
+                    rrp_alias.reaction_id == ReferenceReaction.id,
                 )
                 .join(
-                    ReferenceCompound,
-                    ReferenceCompound.id == ReferenceReactionParticipant.compound_id,
+                    crm_alias,
+                    crm_alias.reference_id == rrp_alias.compound_id,
                 )
-                .join(
-                    ComponentReferenceMapping,
-                    ComponentReferenceMapping.reference_id == ReferenceCompound.id,
+                .filter(
+                    crm_alias.universal_id == cast(parsed_participant[2], COL_ID_STR)
                 )
-                .filter(ComponentReferenceMapping.universal_id == parsed_participant[2])
-                .distinct()
             )
-            if db_entries is None:
-                db_entries = set(new_db_entries)
-            else:
-                db_entries &= set(new_db_entries)
-            if not db_entries:
-                break
-        if db_entries is None:
+        rrp_count_alias = aliased(ReferenceReactionParticipant)
+        subq = (
+            session.query(
+                rrp_count_alias.reaction_id,
+                func.count(rrp_count_alias.id).label("count"),
+            )
+            .group_by(rrp_count_alias.reaction_id)
+            .subquery()
+        )
+        stmt = stmt.join(subq, subq.c.reaction_id == ReferenceReaction.id).filter(
+            subq.c.count == cast(len(parsed_participants), Integer)
+        )
+
+        db_entries = set(stmt.all())
+
+        # for parsed_participant in parsed_participants:
+        #     new_db_entries = (
+        #         session.query(ReferenceReaction)
+        #         .join(
+        #             ReferenceReactionParticipant,
+        #             ReferenceReactionParticipant.reaction_id == ReferenceReaction.id,
+        #         )
+        #         .join(
+        #             ComponentReferenceMapping,
+        #             ComponentReferenceMapping.reference_id
+        #             == ReferenceReactionParticipant.compound_id,
+        #         )
+        #         .filter(ComponentReferenceMapping.universal_id == parsed_participant[2])
+        #         .distinct()
+        #     )
+        #     if db_entries is None:
+        #         db_entries = set(new_db_entries)
+        #     else:
+        #         db_entries &= set(new_db_entries)
+        #     if not db_entries:
+        #         break
+        if not db_entries:
             return None, None
         db_entries = list(db_entries)
         # print(db_entries)
+
         for db_entry in db_entries:
             # print(f"Matching {db_entry.id}: {db_entry.equation}")
             m = match_reaction_data_with_db_entry(
@@ -281,6 +313,8 @@ def push_reactions(data, session):
         # )
         # if universal_reaction_db is not None:
         #     continue
+        # if bigg_id != "LIPOt2pp":
+        #     continue
         print("###")
         print(f"{bigg_id}: {reaction_data['name']}")
         print(f" RHEA: {reaction_data.get('rhea')}")
@@ -290,6 +324,20 @@ def push_reactions(data, session):
         reaction_data["parsed_participants"] = parse_reaction_participants(
             reaction_data["participants"], session
         )
+
+        # Make sure there are no participants shared between the lhs and rhs
+        cons_d = {}
+        is_consistent = True
+        for p in reaction_data["parsed_participants"]:
+            k = (p[2], p[3], p[4])
+            if k in cons_d:
+                if cons_d[k] != p[1]:
+                    is_consistent = False
+                    break
+            cons_d[k] = p[1]
+        if not is_consistent:
+            continue
+
         print(reaction_data["parsed_participants"])
         print(f"TIME: PARSE: {(t1 := time.time()) - t0}")
         t0 = t1

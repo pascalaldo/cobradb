@@ -229,8 +229,12 @@ def main():
         n = len(models_list)
         model_dir = Path(settings.model_directory)
         for i, model_dict in enumerate(models_list):
-            if model_dict["model_filename"] != "iML1515.json":
-                continue
+            # if model_dict["model_filename"] not in [
+            #     "iML1515.json",
+            #     "iJO1366.xml",
+            #     "iSB619.xml",
+            # ]:
+            #     continue
             print(model_dict)
             logging.info(
                 "Loading model ({} of {}) {}".format(
