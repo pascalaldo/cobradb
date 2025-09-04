@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from pprint import pprint
 
+from cobradb.compartments import load_compartments
 from cobradb.component_loading import load_assembly
 from cobradb.metabolites import create_metabolite
 
@@ -51,7 +52,11 @@ parser.add_argument(
     help="Skip curated reactions loading",
     action="store_true",
 )
-
+parser.add_argument(
+    "--skip-compartments",
+    help="Skip loading compartment names",
+    action="store_true",
+)
 args = parser.parse_args()
 
 
@@ -202,8 +207,8 @@ def main():
 
         n = len(assemblies)
         for i, (assembly_id, assembly_path) in enumerate(assemblies.items()):
-            if assembly_id != "GCF_000005845.2":
-                continue
+            # if assembly_id != "GCF_000005845.2":
+            #     continue
 
             logging.info(f"Loading assembly {assembly_id} ({i+1} of {n})")
             try:
@@ -242,6 +247,7 @@ def main():
                 )
             )
             model_bigg_id = None
+            already_loaded = False
             try:
                 model_bigg_id = load_model(
                     model_dir / model_dict["model_filename"],
@@ -252,6 +258,7 @@ def main():
             except AlreadyLoadedError as e:
                 logging.info(str(e))
                 model_bigg_id = e.bigg_id
+                already_loaded = True
             except Exception as e:
                 print(
                     f"model_dir: '{model_dir}', model_path: '{model_dir / model_dict['model_filename']}'"
@@ -259,27 +266,40 @@ def main():
                 logging.error("Could not load model %s." % model_dict["model_filename"])
                 logging.exception(e)
 
-            if not args.skip_memote and model_bigg_id is not None:
+            if (
+                not args.skip_memote
+                and not already_loaded
+                and model_bigg_id is not None
+            ):
                 model_biggr_filename = f"/models/models/{model_bigg_id}.biggr.sbml"
                 memote_result_filename = f"/models/memote/{model_bigg_id}.biggr.json.gz"
 
-                run_memote(model_biggr_filename, memote_result_filename)
-
+                successful_memote_run = False
                 try:
-                    load_memote_results(
-                        model_bigg_id,
-                        memote_result_filename,
-                        session,
-                    )
+                    run_memote(model_biggr_filename, memote_result_filename)
+                    successful_memote_run = True
                 except Exception as e:
-                    logging.error(
-                        "Could not load memote results %s."
-                        % model_dict["model_filename"]
-                    )
+                    logging.error("Memote failed to run.")
                     logging.exception(e)
+
+                if successful_memote_run:
+                    try:
+                        load_memote_results(
+                            model_bigg_id,
+                            memote_result_filename,
+                            session,
+                        )
+                    except Exception as e:
+                        logging.error(
+                            "Could not load memote results %s."
+                            % model_dict["model_filename"]
+                        )
+                        logging.exception(e)
 
         timings["load_models"] = time.time() - f_start_time
 
+    if not args.skip_compartments:
+        load_compartments(settings.compartment_names, session)
     timings["total"] = time.time() - start_time
     logging.debug(str(timings))
     session.close()

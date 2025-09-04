@@ -17,6 +17,8 @@ FORMULA_PATTERN_SINGLE = re.compile(r"([A-Z][a-z]?)([0-9])*")
 
 
 def fix_explicit_formula(formula):
+    if not isinstance(formula, str):
+        return False, None
     m = FORMULA_PATTERN.fullmatch(formula)
     if m is None:
         return False, None

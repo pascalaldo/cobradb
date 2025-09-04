@@ -182,7 +182,7 @@ def parse_reaction_participants(participants, session):
             if full_id == "":
                 continue
             if ":" in full_id:
-                universal_comp_comp_id, charge = full_id.rsplit(":")
+                universal_comp_comp_id, charge = full_id.rsplit(":", maxsplit=1)
             else:
                 universal_comp_comp_id, charge = full_id, None
             universal_id, compartment = universal_comp_comp_id.rsplit("_", maxsplit=1)
