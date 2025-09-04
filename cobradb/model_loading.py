@@ -601,8 +601,16 @@ def load_metabolites(session, model_id, model, compartment_names, old_metabolite
             ctx["metabolite_db"],
         )
         if universal_comp_component_db is not None:
-            metabolite.id = universal_comp_component_db.id
-
+            new_id = universal_comp_component_db.id
+            if new_id != metabolite.id:
+                if model.metabolites.has_id(new_id):
+                    other_metabolite = model.metabolites.get_by_id(new_id)
+                    if other_metabolite.charge == metabolite.charge:
+                        raise Exception("Two identical metabolites.")
+                    other_metabolite.id = f"{other_metabolite.id}:{Component.charge_to_string(other_metabolite.charge)}"
+                    metabolite.id = comp_comp_db.id
+                else:
+                    metabolite.id = new_id
         if comp_comp_db is not None and metabolite_db is not None:
             metabolite.annotation["biggr"] = comp_comp_db.id
             metabolite.annotation["sbo"] = "SBO:0000247"
@@ -818,7 +826,9 @@ def load_reactions(
 
         participants = [
             dict(
-                compartmentalized_component_id=f"{m.id}:{int(m.charge)}",
+                compartmentalized_component_id=(
+                    m.id if ":" in m.id else f"{m.id}:{int(m.charge)}"
+                ),
                 coefficient=coeff,
             )
             for m, coeff in reaction.metabolites.items()

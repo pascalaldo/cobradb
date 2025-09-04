@@ -216,6 +216,20 @@ class Component(Base):
 
     # __mapper_args__ = {"polymorphic_identity": "component", "polymorphic_on": type}
 
+    @staticmethod
+    def charge_to_string(coefficient):
+        if coefficient is None:
+            return 0
+        if isinstance(coefficient, str):
+            return coefficient
+        if isinstance(coefficient, int):
+            return str(coefficient)
+        if isinstance(coefficient, float):
+            if coefficient.is_integer():
+                return str(int(coefficient))
+            else:
+                return str(coefficient)
+
     def __repr__(self):
         return f"Component ({self.id}): {self.name}"
 
@@ -417,6 +431,7 @@ class ModelReaction(Base):
             self=self
         )
 
+    @staticmethod
     def interpret_id(bigg_id):
         copy_number = 1
         if ":" in bigg_id:
