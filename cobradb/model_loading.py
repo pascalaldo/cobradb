@@ -808,6 +808,10 @@ def load_reactions(
         model_specific_id = reaction.id
         reaction_id = model_specific_id.removeprefix(f"__{model.id}__")
         reaction_id = parse.remove_duplicate_tag(reaction_id)
+        reaction_id, model_reaction_copy_number = parse.split_id_and_copy_tag(
+            reaction_id
+        )
+        # TODO: Make sure to keep copy number equal model and biggr
 
         # if reaction_id != "EX_glc__D_e" and reaction_id != "EX___iML1515__glc__D_e":
         #     continue
@@ -878,7 +882,15 @@ def load_reactions(
                 session.commit()
                 print(f"reaction hash 3: {reaction_hash}")
                 reaction_db = (
-                    session.query(Reaction).filter(Reaction.id == reaction_hash).first()
+                    session.query(Reaction)
+                    .filter(
+                        (Reaction.hash == reaction_hash)
+                        & (
+                            (Reaction.model_id == None)
+                            | (Reaction.model_id == model.id)
+                        )
+                    )
+                    .first()
                 )
             else:
                 # Check for exchange reactions
@@ -1381,9 +1393,11 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
                 session.add(new_object)
 
             # update the gene_reaction_rule if the gene id has changed
-            if gene_id != gene_db.id:
+            if gene_id != gene_db.bigg_id:
                 mr = session.query(ModelReaction).get(mr_db_id)
-                new_rule = _replace_gene_str(mr.gene_reaction_rule, gene_id, gene_db.id)
+                new_rule = _replace_gene_str(
+                    mr.gene_reaction_rule, gene_id, gene_db.bigg_id
+                )
                 (
                     session.query(ModelReaction)
                     .filter(ModelReaction.id == mr_db_id)
