@@ -207,8 +207,8 @@ def main():
 
         n = len(assemblies)
         for i, (assembly_id, assembly_path) in enumerate(assemblies.items()):
-            # if assembly_id != "GCF_000005845.2":
-            #     continue
+            if assembly_id != "GCF_000005845.2":
+                continue
 
             logging.info(f"Loading assembly {assembly_id} ({i+1} of {n})")
             try:
@@ -234,12 +234,10 @@ def main():
         n = len(models_list)
         model_dir = Path(settings.model_directory)
         for i, model_dict in enumerate(models_list):
-            # if model_dict["model_filename"] not in [
-            #     "iML1515.json",
-            #     "iJO1366.xml",
-            #     "iSB619.xml",
-            # ]:
-            #     continue
+            if model_dict["model_filename"] not in [
+                "iML1515.json",
+            ]:
+                continue
             print(model_dict)
             logging.info(
                 "Loading model ({} of {}) {}".format(

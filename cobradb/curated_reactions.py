@@ -656,9 +656,18 @@ def push_reactions(data, session):
         )
         if not reaction_db:
             print("Creating new reaction")
+            copy_number = (
+                session.query(Reaction)
+                .filter(Reaction.universal_id == universal_reaction_db.id)
+                .count()
+                + 1
+            )
+            reaction_id = Reaction.create_id(universal_reaction_db.id, copy_number)
             reaction_db = Reaction(
+                id=reaction_id,
                 hash=reaction_hash,
                 model_id=reaction_model_id,
+                copy_number=copy_number,
                 universal_id=universal_reaction_db.id,
             )
             session.add(reaction_db)

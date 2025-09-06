@@ -1036,7 +1036,11 @@ def load_reactions(
                     reaction.annotation["rhea"] = reference_db.id
 
         # make a new reaction
+        model_reaction_id = ModelReaction.create_id(
+            model_db_id, reaction_db.universal_id, copy_number
+        )
         model_reaction_db = ModelReaction(
+            id=model_reaction_id,
             model_id=model_db_id,
             reaction_id=reaction_db.id,
             gene_reaction_rule=reaction.gene_reaction_rule,

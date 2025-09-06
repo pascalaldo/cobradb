@@ -36,6 +36,25 @@ def push_metabolites(data, session):
             #         print("Matching charges")
         else:
             if chebi_info.get("formula"):
+                inchi_db = None
+                if chebi_info.get("inchi"):
+                    inchi_obj = InChI.from_string(chebi_info["inchi"])
+                    if inchi_obj is not None:
+                        inchi_db = (
+                            session.query(InChI)
+                            .filter(
+                                (InChI.key_major == inchi_obj.key_major)
+                                & (InChI.key_minor == inchi_obj.key_minor)
+                                & (InChI.key_proton == inchi_obj.key_proton)
+                            )
+                            .first()
+                        )
+                        if inchi_obj != inchi_db:
+                            inchi_db = None
+                        if inchi_db is None:
+                            inchi_db = inchi_obj
+                            session.add(inchi_db)
+                            session.commit()
                 print(f"Creating new entry for {ch}")
                 chebi_db = ReferenceCompound(
                     id=ch,
@@ -43,6 +62,7 @@ def push_metabolites(data, session):
                     formula=chebi_info["formula"],
                     charge=str(chebi_info.get("charge", 0)),
                     compound_type="small_molecule",
+                    inchi_id=(inchi_db.id if inchi_db is not None else None),
                 )
                 session.add(chebi_db)
             else:

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from cobradb.metabolites import get_or_create_small_molecule_reference
 from cobradb.models import *
 from cobradb import settings
 from cobradb.util import timing
@@ -227,31 +228,41 @@ def add_reference_conversion_reactions(compound_db, session):
 @timing
 def push_rhea_reference(rhea_db, session):
     for rp_id, reactive_part in rhea_db["reactive_parts"].items():
-        reactive_part_db = ReferenceReactivePart(
-            id=rp_id,
-            name=reactive_part["name"],
-            html_name=reactive_part["html_name"],
-            formula=reactive_part["formula"],
-            charge=reactive_part["charge"],
-        )
-        session.add(reactive_part_db)
+        if rp_id.startswith("CHEBI:"):
+            get_or_create_small_molecule_reference(
+                rp_id, session, cpd_cls=ReferenceReactivePart
+            )
+        else:
+            reactive_part_db = ReferenceReactivePart(
+                id=rp_id,
+                name=reactive_part["name"],
+                html_name=reactive_part["html_name"],
+                formula=reactive_part["formula"],
+                charge=reactive_part["charge"],
+            )
+            session.add(reactive_part_db)
     session.commit()
     for cp_id, compound in rhea_db["compounds"].items():
-        compound_db = ReferenceCompound(
-            id=cp_id,
-            name=compound["name"],
-            html_name=compound["html_name"],
-            formula=compound.get("formula"),
-            charge=compound.get("charge"),
-            compound_type=compound["type"],
-        )
-        session.add(compound_db)
-        for reactive_part in compound.get("reactive_parts", []):
-            reactive_part_matrix_db = ReferenceReactivePartMatrix(
-                compound_id=cp_id,
-                reactive_part_id=reactive_part,
+        if cp_id.startswith("CHEBI:"):
+            _existed, compound_db = get_or_create_small_molecule_reference(
+                cp_id, session
             )
-            session.add(reactive_part_matrix_db)
+        else:
+            compound_db = ReferenceCompound(
+                id=cp_id,
+                name=compound["name"],
+                html_name=compound["html_name"],
+                formula=compound.get("formula"),
+                charge=compound.get("charge"),
+                compound_type=compound["type"],
+            )
+            session.add(compound_db)
+            for reactive_part in compound.get("reactive_parts", []):
+                reactive_part_matrix_db = ReferenceReactivePartMatrix(
+                    compound_id=cp_id,
+                    reactive_part_id=reactive_part,
+                )
+                session.add(reactive_part_matrix_db)
         session.commit()
         add_reference_conversion_reactions(compound_db, session)
         add_reference_exchange_reactions(compound_db, session)

@@ -5,6 +5,11 @@
 from operator import itemgetter
 
 from numpy import isin
+from cobradb.inchi import (
+    inchi_object_to_inchikey,
+    inchi_object_to_string,
+    string_to_inchi_dict,
+)
 from cobradb.settings import db_connection_string
 
 from sqlalchemy import (
@@ -13,7 +18,6 @@ from sqlalchemy import (
     Integer,
     String,
     Float,
-    Table,
     LargeBinary,
     Boolean,
     create_engine,
@@ -26,6 +30,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm.session import close_all_sessions
+from sqlalchemy.ext.hybrid import hybrid_property
 
 # Connect to postgres
 engine = create_engine(db_connection_string)
@@ -36,13 +41,14 @@ Session = sessionmaker(bind=engine)
 HASH_STR_MAX_LEN = 1000
 COL_ID_STR = String(100)
 COL_HASH_STR = String(HASH_STR_MAX_LEN)
-COL_NAME_STR = String(400)
-COL_HTML_NAME_STR = String(1000)
+COL_NAME_STR = String(1000)
+COL_HTML_NAME_STR = String(2000)
 COL_FORMULA_STR = String(1000)
 COL_CHARGE_STR = String(100)
 COL_COEFFICIENT_STR = String(100)
 COL_COMPARTMENT_STR = String(10)
 COL_EQUATION_STR = String(5000)
+COL_INCHI_LAYER = String(10000)
 
 # Make the enums
 _enum_l = [
@@ -119,6 +125,55 @@ class DatabaseVersion(Base):
         self.date_time = date_time
 
 
+class InChI(Base):
+    __tablename__ = "inchi"
+
+    id = Column(Integer, primary_key=True)
+    formula = Column(COL_INCHI_LAYER, nullable=False)
+    c = Column(COL_INCHI_LAYER, nullable=True)
+    h = Column(COL_INCHI_LAYER, nullable=True)
+    q = Column(COL_INCHI_LAYER, nullable=True)
+    p = Column(COL_INCHI_LAYER, nullable=True)
+    b = Column(COL_INCHI_LAYER, nullable=True)
+    t = Column(COL_INCHI_LAYER, nullable=True)
+    m = Column(COL_INCHI_LAYER, nullable=True)
+    s = Column(COL_INCHI_LAYER, nullable=True)
+
+    key_major = Column(String(14), nullable=False)
+    key_minor = Column(String(10), nullable=False)
+    key_proton = Column(String(1), nullable=False)
+
+    @hybrid_property
+    def key(self):
+        return self.key_major + "-" + self.key_minor + "-" + self.key_proton
+
+    def string(self):
+        return inchi_object_to_string(self)
+
+    def calculate_key_parts(self):
+        major, minor, proton = inchi_object_to_inchikey(self)
+        self.key_major = major
+        self.key_minor = minor
+        self.key_proton = proton
+
+    @classmethod
+    def from_string(cls, inchi):
+        d = string_to_inchi_dict(inchi)
+        if d is None:
+            return None
+        o = cls(**d)
+        o.calculate_key_parts()
+        return o
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        for x in ["formula", "c", "h", "q", "p", "b", "t", "m", "s"]:
+            if getattr(self, x) != getattr(other, x):
+                return False
+        return True
+
+
 class Genome(Base):
     __tablename__ = "genome"
 
@@ -184,6 +239,7 @@ class ReferenceCompound(Base):
     compound_type = Column(custom_enums["compound_type"], nullable=False)
     charge = Column(COL_CHARGE_STR, nullable=True)
     formula = Column(COL_FORMULA_STR, nullable=True)
+    inchi_id = Column(Integer, ForeignKey(InChI.id), nullable=True)
 
     def get_sbo(self):
         return COMPOUND_TYPE_TO_SBO.get(str(self.compound_type), "small_molecule")
@@ -404,9 +460,9 @@ class ModelGene(Base):
 class ModelReaction(Base):
     __tablename__ = "model_reaction"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(COL_ID_STR, primary_key=True)
     reaction_id = Column(
-        Integer,
+        COL_ID_STR,
         ForeignKey("reaction.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
@@ -425,6 +481,13 @@ class ModelReaction(Base):
     subsystem = Column(String, nullable=True)
 
     __table_args__ = (UniqueConstraint("reaction_id", "model_id", "copy_number"),)
+
+    @staticmethod
+    def create_id(model_id, universal_reaction_id, copy_number):
+        if copy_number == 1:
+            return f"{model_id}|{universal_reaction_id}"
+        else:
+            return f"{model_id}|{universal_reaction_id}:{copy_number}"
 
     def __repr__(self):
         return "<cobradb ModelCeaction(id={self.id}, reaction_id={self.reaction_id}, model_id={self.model_id}, copy_number={self.copy_number})>".format(
@@ -450,7 +513,7 @@ class GeneReactionMatrix(Base):
         nullable=False,
     )
     model_reaction_id = Column(
-        Integer,
+        COL_ID_STR,
         ForeignKey("model_reaction.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False,
     )
@@ -593,6 +656,8 @@ class ReferenceReactivePart(Base):
     formula = Column(COL_FORMULA_STR, nullable=True)
     charge = Column(COL_CHARGE_STR, nullable=True)
 
+    inchi_id = Column(Integer, ForeignKey(InChI.id), nullable=True)
+
     def __repr__(self):
         return (
             "<cobradb ReferenceReactivePart(id={self.id}, "
@@ -713,9 +778,10 @@ class UniversalReaction(Base):
 class Reaction(Base):
     __tablename__ = "reaction"
 
-    id = Column(Integer, primary_key=True)
+    id = Column(COL_ID_STR, primary_key=True)
     hash = Column(COL_HASH_STR, nullable=False)
     model_id = Column(COL_ID_STR, ForeignKey(Model.id), nullable=True)
+    copy_number = Column(Integer, nullable=False)
 
     universal_id = Column(COL_ID_STR, ForeignKey(UniversalReaction.id), nullable=False)
 
@@ -723,6 +789,13 @@ class Reaction(Base):
 
     def __repr__(self):
         return "<cobradb Reaction(id=%s)>" % (self.id,)
+
+    @staticmethod
+    def create_id(universal_id, copy_number):
+        if copy_number != 1:
+            return f"{universal_id}:{copy_number}"
+        else:
+            return universal_id
 
     @staticmethod
     def coefficient_to_string(coefficient):
@@ -791,7 +864,7 @@ class UniversalReactionMatrix(Base):
 class ReactionMatrix(Base):
     __tablename__ = "reaction_matrix"
     id = Column(Integer, primary_key=True)
-    reaction_id = Column(Integer, ForeignKey(Reaction.id), nullable=False)
+    reaction_id = Column(COL_ID_STR, ForeignKey(Reaction.id), nullable=False)
     reaction_matrix_id = Column(
         Integer, ForeignKey(UniversalReactionMatrix.id), nullable=False
     )
@@ -828,7 +901,7 @@ class MemoteResult(Base):
     model_id = Column(COL_ID_STR, ForeignKey(Model.id), nullable=False)
     test_id = Column(COL_ID_STR, ForeignKey(MemoteTest.id), nullable=False)
 
-    model_reaction_id = Column(Integer, ForeignKey(ModelReaction.id), nullable=True)
+    model_reaction_id = Column(COL_ID_STR, ForeignKey(ModelReaction.id), nullable=True)
     model_component_id = Column(
         Integer, ForeignKey(ModelCompartmentalizedComponent.id), nullable=True
     )

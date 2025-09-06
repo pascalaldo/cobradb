@@ -18,12 +18,11 @@ RUN python setup.py install
 
 #COPY settings.ini /app/settings.ini
 #COPY settings.small.ini /app/settings.ini
-# CMD ["bin/load_db", "--drop-all", "--skip-genomes"]
-# CMD ["bin/load_db", "--drop-all"]
 
-# CMD ["bin/new_load_db", "--drop-all"]
+CMD ["bin/new_load_db", "--drop-all"]
+# CMD ["bin/new_load_db", "--drop-all", "--skip-genomes", "--skip-curated-reactions", "--skip-models"]
 # CMD ["bin/new_load_db", "--skip-genomes", "--skip-rhea"]
 # CMD ["bin/new_load_db", "--skip-genomes", "--skip-rhea", "--skip-curated-metabolites"]
 # CMD ["bin/new_load_db", "--skip-genomes", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions"]
-CMD ["bin/new_load_db", "--skip-genomes", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-models"]
+# CMD ["bin/new_load_db", "--skip-genomes", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-models"]
 # CMD ["bin/new_load_db", "--skip-rhea"]

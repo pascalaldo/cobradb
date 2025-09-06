@@ -3,6 +3,7 @@ from cobradb.models import (
     Component,
     ComponentIDMapping,
     ComponentReferenceMapping,
+    InChI,
     ReferenceCompound,
     UniversalComponent,
     UniversalComponentReferenceMapping,
@@ -71,23 +72,23 @@ def load_default_chebi_mapping():
 DEFAULT_CHEBI_MAPPING = load_default_chebi_mapping()
 
 
-class InChI:
-    def __init__(self, inchi_str):
-        self.string = inchi_str
-        self.formula, self.layers = InChI.parse_into_layers(inchi_str)
-
-    @staticmethod
-    def parse_into_layers(inchi_str):
-        l = inchi_str.split("/")
-        if (prefix := l.pop(0)) != "InChI=1S":
-            raise ValueError(f"InChI prefix not valid: '{prefix}'")
-        formula = l[0]
-        layers = {x[0]: x[1:] for x in l[1:]}
-        return formula, layers
-
-    def has_layer(self, layer_id):
-        return layer_id in self.layers
-
+# class InChI:
+#     def __init__(self, inchi_str):
+#         self.string = inchi_str
+#         self.formula, self.layers = InChI.parse_into_layers(inchi_str)
+#
+#     @staticmethod
+#     def parse_into_layers(inchi_str):
+#         l = inchi_str.split("/")
+#         if (prefix := l.pop(0)) != "InChI=1S":
+#             raise ValueError(f"InChI prefix not valid: '{prefix}'")
+#         formula = l[0]
+#         layers = {x[0]: x[1:] for x in l[1:]}
+#         return formula, layers
+#
+#     def has_layer(self, layer_id):
+#         return layer_id in self.layers
+#
 
 MAIN_RELATIONS = [
     "is_conjugate_acid_of",
@@ -122,7 +123,7 @@ def get_related_chebis(
 
 
 def get_or_create_small_molecule_reference(
-    chebi: str, session
+    chebi: str, session, cpd_cls=ReferenceCompound
 ) -> Tuple[bool, ReferenceCompound]:
     chebi_db = (
         session.query(ReferenceCompound).filter(ReferenceCompound.id == chebi).first()
@@ -130,14 +131,37 @@ def get_or_create_small_molecule_reference(
     if chebi_db:
         return True, chebi_db
     chebi_entity = ChebiEntity(chebi)
-    chebi_db = ReferenceCompound(
+    inchi_db = None
+    if chebi_inchi := chebi_entity.get_inchi():
+        inchi_obj = InChI.from_string(chebi_inchi)
+        if inchi_obj is not None:
+            inchi_db = (
+                session.query(InChI)
+                .filter(
+                    (InChI.key_major == inchi_obj.key_major)
+                    & (InChI.key_minor == inchi_obj.key_minor)
+                    & (InChI.key_proton == inchi_obj.key_proton)
+                )
+                .first()
+            )
+            if inchi_obj != inchi_db:
+                inchi_db = None
+            if inchi_db is None:
+                inchi_db = inchi_obj
+                session.add(inchi_db)
+                session.commit()
+    cpd_dict = dict(
         id=chebi,
         name=chebi_entity.get_name(),
         html_name=chebi_entity.get_name(),
-        compound_type="small_molecule",
         charge=str(chebi_entity.get_charge()),
         formula=chebi_entity.get_formula(),
+        inchi_id=(inchi_db.id if inchi_db is not None else None),
     )
+    if cpd_cls is ReferenceCompound:
+        cpd_dict["compound_type"] = "small_molecule"
+
+    chebi_db = cpd_cls(**cpd_dict)
     session.add(chebi_db)
     return False, chebi_db
 
