@@ -147,7 +147,7 @@ class InChI(Base):
     def key(self):
         return self.key_major + "-" + self.key_minor + "-" + self.key_proton
 
-    def string(self):
+    def to_string(self):
         return inchi_object_to_string(self)
 
     def calculate_key_parts(self):
