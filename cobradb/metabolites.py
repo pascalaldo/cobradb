@@ -231,7 +231,11 @@ def create_metabolite(
                 "message": "charge + formula combination not present",
             }
 
-    default_chebi = DEFAULT_CHEBI_MAPPING.get(input_chebi)
+    default_chebi = None
+    for ch in [input_chebi] + all_chebis:
+        default_chebi = DEFAULT_CHEBI_MAPPING.get(ch)
+        if default_chebi is not None:
+            break
     if default_chebi not in references_db:
         default_chebi = None
     if default_chebi is None:

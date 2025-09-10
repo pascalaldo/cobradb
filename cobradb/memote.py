@@ -23,21 +23,25 @@ TEST_TYPES = {
     # "test_biomass_precursors_default_production": "per_reaction_count_metabolite",
     # "test_biomass_precursors_open_production": "per_reaction_count_metabolite",
     "test_biomass_presence": "count_reaction",
-    "test_biomass_specific_sbo_presence": "general",
+    "test_biomass_specific_sbo_presence": {"type": "general", "invert": True},
     "test_blocked_reactions": "count_reaction",
     # "test_compartments_presence": "compartment_count",
     "test_degrees_of_freedom": "general",
-    "test_demand_specific_sbo_presence": "count_reaction",
+    "test_demand_specific_sbo_presence": {"type": "count_reaction", "invert": True},
     # "test_detect_energy_generating_cycles": "TODO",
     # "test_direct_metabolites_in_biomass": "per_reaction_count_metabolite",
     # "test_essential_precursors_not_in_biomass": "per_reaction_count_metabolite_MNX?",
-    "test_exchange_specific_sbo_presence": "count_reaction",
+    "test_exchange_specific_sbo_presence": {
+        "type": "count_reaction",
+        "invert": True,
+        "invert_result": True,
+    },
     "test_fast_growth_default": "per_reaction",
     "test_fbc_presence": "general",
     # "test_find_constrained_pure_metabolic_reactions": "TODO",
     "test_find_constrained_transport_reactions": "count_reaction",
     "test_find_deadends": "count_metabolite",
-    "test_find_disconnected": "count_metabolite",
+    "test_find_disconnected": {"type": "count_metabolite", "invert": True},
     "test_find_duplicate_metabolites_in_compartments": "count_metabolite",
     "test_find_duplicate_reactions": "count_reaction",
     "test_find_medium_metabolites": "count_metabolite",
@@ -45,6 +49,10 @@ TEST_TYPES = {
     "test_find_metabolites_not_produced_with_open_bounds": "count_metabolite",
     "test_find_orphans": "count_metabolite",
     "test_find_pure_metabolic_reactions": "count_reaction",
+    "test_find_reactions_unbounded_flux_default_condition": {
+        "type": "count_reaction",
+        "invert": True,
+    },
     # "test_find_reactions_with_identical_genes": "TODO",
     # "test_find_reactions_with_partially_identical_annotations": "TODO",
     "test_find_reversible_oxygen_reactions": "count_reaction",
@@ -64,16 +72,28 @@ TEST_TYPES = {
     "test_inconsistent_min_stoichiometry": "count_metabolite",
     "test_matrix_rank": "general",
     # "test_metabolic_coverage": "TODO",
-    "test_metabolic_reaction_specific_sbo_presence": "count_reaction",
+    "test_metabolic_reaction_specific_sbo_presence": {
+        "type": "count_reaction",
+        "invert": True,
+        "invert_result": True,
+    },
     # "test_metabolite_annotation_overview": "TODO",
     "test_metabolite_annotation_presence": "count_metabolite",
     # "test_metabolite_annotation_wrong_ids": "TODO",
     "test_metabolite_id_namespace_consistency": "count_metabolite",
-    "test_metabolite_sbo_presence": "count_metabolite",
-    "test_metabolite_specific_sbo_presence": "count_metabolite",
+    "test_metabolite_sbo_presence": {
+        "type": "count_metabolite",
+        "invert": True,
+        "invert_result": True,
+    },
+    "test_metabolite_specific_sbo_presence": {
+        "type": "count_metabolite",
+        "invert": True,
+        "invert_result": True,
+    },
     "test_metabolites_charge_presence": "count_metabolite",
     "test_metabolites_formula_presence": "count_metabolite",
-    "test_metabolites_presence": "count_metabolite",
+    "test_metabolites_presence": {"type": "count_metabolite", "field": "count_data"},
     # "test_model_id_presence": "general",
     "test_ngam_presence": "count_reaction",
     "test_number_independent_conservation_relations": "general",
@@ -81,17 +101,25 @@ TEST_TYPES = {
     # "test_reaction_annotation_overview": "TODO",
     "test_reaction_annotation_presence": "count_reaction",
     # "test_reaction_annotation_wrong_ids": "TODO",
-    "test_reaction_charge_balance": "count_reaction",
+    "test_reaction_charge_balance": {"type": "count_reaction", "invert": True},
     "test_reaction_id_namespace_consistency": "count_reaction",
-    "test_reaction_mass_balance": "count_reaction",
-    "test_reaction_sbo_presence": "count_reaction",
-    "test_reactions_presence": "count_reaction",
+    "test_reaction_mass_balance": {"type": "count_reaction", "invert": True},
+    "test_reaction_sbo_presence": {
+        "type": "count_reaction",
+        "invert": True,
+        "invert_result": True,
+    },
+    "test_reactions_presence": {"type": "count_reaction", "field": "count_data"},
     # "test_sbml_level": "general (STRING)",
-    "test_sink_specific_sbo_presence": "count_reaction",
-    "test_stoichiometric_consistency": "general",
+    "test_sink_specific_sbo_presence": {"type": "count_reaction", "invert": True},
+    "test_stoichiometric_consistency": {"type": "general", "invert": True},
     "test_transport_reaction_gpr_presence": "count_reaction",
-    "test_transport_reaction_specific_sbo_presence": "count_reaction",
-    "test_unconserved_metabolites": "count_metabolite",
+    "test_transport_reaction_specific_sbo_presence": {
+        "type": "count_reaction",
+        "invert": True,
+        "invert_result": True,
+    },
+    "test_unconserved_metabolites": {"type": "count_metabolite", "field": "count_data"},
 }
 
 
@@ -140,6 +168,15 @@ def load_memote_results(model_bigg_id, filename, session):
         if test_type is None:
             continue
 
+        invert = False
+        invert_result = False
+        field = "metric"
+        if isinstance(test_type, dict):
+            field = test_type.get("field", field)
+            invert = test_type.get("invert", invert)
+            invert_result = test_type.get("invert_result", invert_result)
+            test_type = test_type["type"]
+
         test_db = session.query(MemoteTest).filter(MemoteTest.id == test_id).first()
         if test_db is None:
             test_db = MemoteTest(
@@ -147,6 +184,9 @@ def load_memote_results(model_bigg_id, filename, session):
                 name=test_result["title"],
                 summary=test_result.get("summary"),
                 format_type=test_result["format_type"],
+                invert=invert,
+                invert_result=invert_result,
+                field=field,
             )
             session.add(test_db)
             session.commit()
@@ -168,6 +208,8 @@ def load_memote_results(model_bigg_id, filename, session):
             elif isinstance(prop_val, bool):
                 general_result[prop] = 1.0 if prop_val else 0.0
             elif (is_dict := isinstance(prop_val, dict)) or isinstance(prop_val, list):
+                if prop == "data":
+                    general_result["data_count"] = len(prop_val)
                 for k in prop_val:
                     if k not in specific_results:
                         specific_results[k] = {

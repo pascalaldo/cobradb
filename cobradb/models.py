@@ -893,6 +893,10 @@ class MemoteTest(Base):
     summary = Column(String(10000), nullable=True)
     format_type = Column(String(20), nullable=False)
 
+    invert = Column(Boolean, nullable=True)
+    invert_result = Column(Boolean, nullable=True)
+    field = Column(String(20), nullable=True)
+
 
 class MemoteResult(Base):
     __tablename__ = "memote_result"
@@ -912,3 +916,5 @@ class MemoteResult(Base):
     duration = Column(Float(), nullable=True)
     metric = Column(Float(), nullable=True)
     result = Column(custom_enums["test_result"], nullable=True)
+
+    data_count = Column(Integer, nullable=True)
