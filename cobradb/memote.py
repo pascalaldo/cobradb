@@ -39,16 +39,29 @@ TEST_TYPES = {
     "test_fast_growth_default": "per_reaction",
     "test_fbc_presence": "general",
     # "test_find_constrained_pure_metabolic_reactions": "TODO",
-    "test_find_constrained_transport_reactions": "count_reaction",
+    "test_find_constrained_transport_reactions": {
+        "type": "count_reaction",
+        "field": "data_count",
+    },
     "test_find_deadends": "count_metabolite",
     "test_find_disconnected": {"type": "count_metabolite", "invert": True},
-    "test_find_duplicate_metabolites_in_compartments": "count_metabolite",
-    "test_find_duplicate_reactions": "count_reaction",
-    "test_find_medium_metabolites": "count_metabolite",
+    "test_find_duplicate_metabolites_in_compartments": {
+        "type": "count_metabolite",
+        "field": "data_count",
+    },
+    "test_find_duplicate_reactions": {"type": "count_reaction"},
+    "test_find_medium_metabolites": {
+        "type": "count_metabolite",
+        "field": "data_count",
+        "invert_result": True,
+    },
     "test_find_metabolites_not_consumed_with_open_bounds": "count_metabolite",
     "test_find_metabolites_not_produced_with_open_bounds": "count_metabolite",
     "test_find_orphans": "count_metabolite",
-    "test_find_pure_metabolic_reactions": "count_reaction",
+    "test_find_pure_metabolic_reactions": {
+        "type": "count_reaction",
+        "field": "data_count",
+    },
     "test_find_reactions_unbounded_flux_default_condition": {
         "type": "count_reaction",
         "invert": True,
@@ -57,7 +70,7 @@ TEST_TYPES = {
     # "test_find_reactions_with_partially_identical_annotations": "TODO",
     "test_find_reversible_oxygen_reactions": "count_reaction",
     "test_find_stoichiometrically_balanced_cycles": "count_reaction",
-    "test_find_transport_reactions": "count_reaction",
+    "test_find_transport_reactions": {"type": "count_reaction", "field": "data_count"},
     # "test_find_unique_metabolites": "count_metabolite", (NO compartment)
     "test_gam_in_biomass": "per_reaction",
     # "test_gene_essentiality_from_data_qualitative": "TODO",
@@ -91,9 +104,15 @@ TEST_TYPES = {
         "invert": True,
         "invert_result": True,
     },
-    "test_metabolites_charge_presence": "count_metabolite",
-    "test_metabolites_formula_presence": "count_metabolite",
-    "test_metabolites_presence": {"type": "count_metabolite", "field": "count_data"},
+    "test_metabolites_charge_presence": {
+        "type": "count_metabolite",
+        "field": "data_count",
+    },
+    "test_metabolites_formula_presence": {
+        "type": "count_metabolite",
+        "field": "data_count",
+    },
+    "test_metabolites_presence": {"type": "count_metabolite", "field": "data_count"},
     # "test_model_id_presence": "general",
     "test_ngam_presence": "count_reaction",
     "test_number_independent_conservation_relations": "general",
@@ -109,7 +128,7 @@ TEST_TYPES = {
         "invert": True,
         "invert_result": True,
     },
-    "test_reactions_presence": {"type": "count_reaction", "field": "count_data"},
+    "test_reactions_presence": {"type": "count_reaction", "field": "data_count"},
     # "test_sbml_level": "general (STRING)",
     "test_sink_specific_sbo_presence": {"type": "count_reaction", "invert": True},
     "test_stoichiometric_consistency": {"type": "general", "invert": True},
@@ -119,7 +138,7 @@ TEST_TYPES = {
         "invert": True,
         "invert_result": True,
     },
-    "test_unconserved_metabolites": {"type": "count_metabolite", "field": "count_data"},
+    "test_unconserved_metabolites": {"type": "count_metabolite", "field": "data_count"},
 }
 
 
