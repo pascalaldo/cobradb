@@ -2,14 +2,18 @@
 
 # Configure the logger before imports so other packages do not override this
 # setup.
+import os
+
+os.environ["LIBCHEBIPY_DOWNLOAD_DIR"] = "/chebi"
 import logging
 import time
 from pathlib import Path
-from pprint import pprint
+import cProfile
+
+from sqlalchemy.orm import close_all_sessions
 
 from cobradb.compartments import load_compartments
 from cobradb.component_loading import load_assembly
-from cobradb.metabolites import create_metabolite
 
 from cobradb.curated_reactions import load_reactions
 from cobradb.models import *
@@ -219,13 +223,13 @@ def main():
                 logging.info(str(e))
             except Exception as e:
                 logging.exception(e)
+        session.commit()
         timings["load_assemblies"] = time.time() - f_start_time
 
     if not args.skip_rhea:
         load_rhea(settings.rhea, session)
     if not args.skip_curated_metabolites:
         load_bigg_ids(settings.curated_metabolites, session)
-    pprint(create_metabolite("amet", "CHEBI:15414", session))
     if not args.skip_curated_reactions:
         load_reactions(settings.curated_reactions, session)
     if not args.skip_models:
@@ -298,6 +302,7 @@ def main():
 
     if not args.skip_compartments:
         load_compartments(settings.compartment_names, session)
+        session.commit()
     timings["total"] = time.time() - start_time
     logging.debug(str(timings))
     session.close()
@@ -305,5 +310,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-    # cProfile.run("main()")
+    # main()
+    cProfile.run("main()", sort="cumtime")

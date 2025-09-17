@@ -11,10 +11,13 @@ services:
         condition: service_healthy
     networks:
       - biggr-net
+    environment:
+      LIBCHEBIPY_DOWNLOAD_DIR: "/chebi" 
     volumes:
       - /data/biggr-genbank:/genbank
       - /data/biggr-assemblies:/assemblies
       - /data/biggr-bigg-models:/models
+      - /data/biggr-chebi-cache:/chebi
     stdin_open: true
     tty: true
   biggr-db:

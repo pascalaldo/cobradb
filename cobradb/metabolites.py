@@ -1,4 +1,7 @@
 from typing import Tuple, Dict, Optional
+
+from sqlalchemy import select
+from sqlalchemy.orm import Bundle
 from cobradb.models import (
     Component,
     ComponentIDMapping,
@@ -125,9 +128,9 @@ def get_related_chebis(
 def get_or_create_small_molecule_reference(
     chebi: str, session, cpd_cls=ReferenceCompound
 ) -> Tuple[bool, ReferenceCompound]:
-    chebi_db = (
-        session.query(ReferenceCompound).filter(ReferenceCompound.id == chebi).first()
-    )
+    chebi_db = session.scalars(
+        select(ReferenceCompound).filter(ReferenceCompound.bigg_id == chebi).limit(1)
+    ).first()
     if chebi_db:
         return True, chebi_db
     chebi_entity = ChebiEntity(chebi)
@@ -135,28 +138,26 @@ def get_or_create_small_molecule_reference(
     if chebi_inchi := chebi_entity.get_inchi():
         inchi_obj = InChI.from_string(chebi_inchi)
         if inchi_obj is not None:
-            inchi_db = (
-                session.query(InChI)
+            inchi_db = session.scalars(
+                select(InChI)
                 .filter(
                     (InChI.key_major == inchi_obj.key_major)
                     & (InChI.key_minor == inchi_obj.key_minor)
                     & (InChI.key_proton == inchi_obj.key_proton)
                 )
-                .first()
-            )
+                .limit(1)
+            ).first()
             if inchi_obj != inchi_db:
                 inchi_db = None
             if inchi_db is None:
                 inchi_db = inchi_obj
-                session.add(inchi_db)
-                session.commit()
     cpd_dict = dict(
-        id=chebi,
+        bigg_id=chebi,
         name=chebi_entity.get_name(),
         html_name=chebi_entity.get_name(),
         charge=str(chebi_entity.get_charge()),
         formula=chebi_entity.get_formula(),
-        inchi_id=(inchi_db.id if inchi_db is not None else None),
+        inchi=inchi_db,
     )
     if cpd_cls is ReferenceCompound:
         cpd_dict["compound_type"] = "small_molecule"
@@ -179,11 +180,11 @@ def create_metabolite(
     if not is_bigg_id_valid(proposed_bigg_id):
         return {"status": "error", "message": "invalid bigg id"}
 
-    old_id_db = (
-        session.query(ComponentIDMapping)
-        .filter(ComponentIDMapping.old_id == proposed_bigg_id)
-        .first()
-    )
+    old_id_db = session.scalars(
+        select(ComponentIDMapping)
+        .filter(ComponentIDMapping.old_bigg_id == proposed_bigg_id)
+        .limit(1)
+    ).first()
     if old_id_db:
         return {
             "status": "error",
@@ -191,28 +192,35 @@ def create_metabolite(
             "new_id": old_id_db.new_id,
         }
 
-    universal_component_db = (
-        session.query(UniversalComponent)
-        .filter(UniversalComponent.id == proposed_bigg_id)
-        .first()
-    )
+    universal_component_db = session.scalars(
+        select(UniversalComponent)
+        .filter(UniversalComponent.bigg_id == proposed_bigg_id)
+        .limit(1)
+    ).first()
     if universal_component_db:
         return {"status": "error", "message": "bigg id already exists"}
 
     all_chebis = get_related_chebis(input_chebi)
     all_chebis = list(all_chebis.keys())
 
-    component_ref_mapping_db = (
-        session.query(ComponentReferenceMapping)
-        .filter(ComponentReferenceMapping.reference_id in all_chebis)
-        .first()
-    )
+    component_ref_mapping_db = session.execute(
+        select(
+            ComponentReferenceMapping,
+            Bundle("ref_comp", ReferenceCompound.bigg_id),
+            Bundle("uni_comp", UniversalComponent.bigg_id),
+        )
+        .join(ComponentReferenceMapping.reference_compound)
+        .join(ComponentReferenceMapping.component)
+        .join(Component.universal_component)
+        .filter(ReferenceCompound.bigg_id.in_(all_chebis))
+        .limit(1)
+    ).one_or_none()
     if component_ref_mapping_db:
         return {
             "status": "error",
             "message": "chebi already associated",
-            "chebi": component_ref_mapping_db.reference_id,
-            "bigg_id": component_ref_mapping_db.universal_id,
+            "chebi": component_ref_mapping_db.ref_comp.bigg_id,
+            "bigg_id": component_ref_mapping_db.uni_comp.bigg_id,
         }
 
     references_db = {
@@ -243,7 +251,7 @@ def create_metabolite(
     default_chebi_entity = ChebiEntity(default_chebi)
 
     universal_component_db = UniversalComponent(
-        id=proposed_bigg_id,
+        bigg_id=proposed_bigg_id,
         name=default_chebi_entity.get_name(),
     )
     session.add(universal_component_db)
@@ -265,37 +273,37 @@ def create_metabolite(
                 continue
 
             component_db = Component(
-                id=full_bid,
-                universal_id=universal_component_db.id,
+                bigg_id=full_bid,
                 name=reference_db.name,
                 formula=formula,
                 charge=int_charge,
             )
-            session.add(component_db)
+            universal_component_db.components.append(component_db)
             full_bids_created[full_bid] = component_db
         component_db = full_bids_created[full_bid]
 
         component_ref_mapping_db = ComponentReferenceMapping(
-            component_id=component_db.id,
-            universal_id=universal_component_db.id,
-            reference_id=reference_db.id,
+            universal_component=universal_component_db,
+            reference_compound=reference_db,
         )
-        session.add(component_ref_mapping_db)
+        component_db.reference_mappings.append(component_ref_mapping_db)
 
         if chebi == default_chebi or default_chebi is None:
-            universal_component_ref_mapping_db = (
-                session.query(UniversalComponentReferenceMapping)
-                .filter(UniversalComponentReferenceMapping.id == proposed_bigg_id)
-                .first()
-            )
+            universal_component_ref_mapping_db = session.scalars(
+                select(UniversalComponentReferenceMapping)
+                .filter(
+                    UniversalComponentReferenceMapping.id == universal_component_db.id
+                )
+                .limit(1)
+            ).first()
             if not universal_component_ref_mapping_db:
-                session.commit()
                 universal_component_ref_mapping_db = UniversalComponentReferenceMapping(
-                    id=proposed_bigg_id, mapping_id=component_ref_mapping_db.id
+                    id=universal_component_db.id, mapping=component_ref_mapping_db
                 )
                 session.add(universal_component_ref_mapping_db)
 
-        successfully_added.append((full_bid, reference_db.id))
+        session.commit()
+        successfully_added.append((full_bid, reference_db.bigg_id))
 
     if not full_bids_created:
         session.commit()
@@ -311,22 +319,24 @@ def create_model_specific_metabolite(bigg_id, model_id, charge, name, formula, s
     new_universal_id = f"__{model_id}__{bigg_id}"
     new_bigg_id = f"__{model_id}__{bigg_id}:{charge}"
 
-    universal_metabolite_db = (
-        session.query(UniversalComponent)
-        .filter(UniversalComponent.id == new_universal_id)
-        .first()
-    )
+    universal_metabolite_db = session.scalars(
+        select(UniversalComponent)
+        .filter(UniversalComponent.bigg_id == new_universal_id)
+        .limit(1)
+    ).first()
     if not universal_metabolite_db:
         universal_metabolite_db = UniversalComponent(
-            id=new_universal_id, name=name, model_specific=True
+            bigg_id=new_universal_id, name=name, model_specific=True
         )
         session.add(universal_metabolite_db)
 
-    metabolite_db = session.query(Component).filter(Component.id == new_bigg_id).first()
+    metabolite_db = session.scalars(
+        select(Component).filter(Component.bigg_id == new_bigg_id).limit(1)
+    ).first()
     if not metabolite_db:
         metabolite_db = Component(
-            id=new_bigg_id,
-            universal_id=new_universal_id,
+            bigg_id=new_bigg_id,
+            universal_component=universal_metabolite_db,
             name=name,
             formula=formula,
             charge=charge,

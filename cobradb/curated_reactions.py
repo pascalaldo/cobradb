@@ -2,19 +2,16 @@
 
 from sqlalchemy.orm import aliased
 from cobradb.models import *
-from cobradb import settings
 from cobradb.util import timing
 
 from sqlalchemy import cast, func
 from sqlalchemy import select
-import re
 import logging
 import json
 
 import time
 
 from pprint import pprint
-import re
 from copy import deepcopy
 
 COMP_IN_OUT = [
@@ -33,59 +30,37 @@ def load_bigg_id_data(filename):
 
 
 def match_reaction_data_with_db_entry(parsed_participants, db_entry, session):
-    stmt = (
-        select(
-            ReferenceReactionParticipant,
-            ReferenceCompound,
-        )
-        .join(
-            ReferenceCompound,
-            ReferenceCompound.id == ReferenceReactionParticipant.compound_id,
-        )
-        .where(ReferenceReactionParticipant.reaction_id == db_entry.id)
-    )
-    # print(stmt)
-    # print(db_entry.id)
     reaction_mappings = [({}, {}, parsed_participants[:], [])]
-    # participants_db = session.execute(stmt)
-    participants_db = (
-        session.query(
-            ReferenceReactionParticipant,
-            ReferenceCompound,
-        )
-        .join(
-            ReferenceCompound,
-            ReferenceCompound.id == ReferenceReactionParticipant.compound_id,
-        )
-        .filter(ReferenceReactionParticipant.reaction_id == db_entry.id)
-    )
-    if len(parsed_participants) != participants_db.count():
+    participants_query = select(
+        ReferenceReactionParticipant,
+    ).filter(ReferenceReactionParticipant.reaction_id == db_entry.id)
+
+    if (
+        len(parsed_participants)
+        != session.execute(
+            select(func.count()).select_from(participants_query.subquery())
+        ).scalar_one()
+    ):
         return None
-    for (
-        participant,
-        compound,
-    ) in participants_db.all():
+    participants_db = session.scalars(participants_query)
+
+    for participant in participants_db:
         requires_n = "n" in str(participant.coefficient).lower()
 
         # print(f"Participant: {participant} -> {compound}")
-        stmt = (
-            select(
-                ComponentReferenceMapping,
-                UniversalComponent,
-                Component,
-            )
+        crmappings_db = session.scalars(
+            select(ComponentReferenceMapping)
             .join(
-                UniversalComponent,
-                UniversalComponent.id == ComponentReferenceMapping.universal_id,
+                ComponentReferenceMapping.universal_component,
             )
+            .join(ComponentReferenceMapping.component)
             .where(
-                compound.id == ComponentReferenceMapping.reference_id,
+                participant.compound_id
+                == ComponentReferenceMapping.reference_compound_id,
             )
-            .join(Component, Component.id == ComponentReferenceMapping.component_id)
-        )
+        ).all()
         participant_mappings = []
-        crmappings_db = session.execute(stmt)
-        for crmapping, universal_component, component in crmappings_db:
+        for crmapping in crmappings_db:
             if requires_n and crmapping.reference_n is None:
                 continue
             coefficient = participant.coefficient
@@ -95,9 +70,9 @@ def match_reaction_data_with_db_entry(parsed_participants, db_entry, session):
             ms = [
                 p
                 for p in parsed_participants
-                if p[2] == universal_component.id
+                if p[2] == crmapping.universal_component.bigg_id
                 and float(p[0]) == coefficient
-                and ((p[4] is None) or (float(p[4]) == component.charge))
+                and ((p[4] is None) or (float(p[4]) == crmapping.component.charge))
             ]
             if not ms:
                 continue
@@ -112,7 +87,7 @@ def match_reaction_data_with_db_entry(parsed_participants, db_entry, session):
                         ),
                         m,
                         participant,
-                        component,
+                        crmapping.component,
                         crmapping,
                     ),
                 )
@@ -146,7 +121,7 @@ def match_reaction_data_with_db_entry(parsed_participants, db_entry, session):
                     new_item[3].append(
                         (
                             participant_mapping[3],
-                            participant_mapping[4],
+                            # participant_mapping[4],
                             participant_mapping[5],
                         )
                     )
@@ -186,14 +161,17 @@ def parse_reaction_participants(participants, session):
             else:
                 universal_comp_comp_id, charge = full_id, None
             universal_id, compartment = universal_comp_comp_id.rsplit("_", maxsplit=1)
-            id_mapping_db = (
-                session.query(ComponentIDMapping)
-                .filter(ComponentIDMapping.old_id == universal_id)
-                .first()
-            )
+            id_mapping_db = session.scalars(
+                select(ComponentIDMapping)
+                .join(ComponentIDMapping.new_universal_component)
+                .filter(ComponentIDMapping.old_bigg_id == universal_id)
+                .limit(1)
+            ).first()
             if id_mapping_db:
-                print(f"Mapping: {id_mapping_db.old_id} -> {id_mapping_db.new_id}")
-                universal_id = id_mapping_db.new_id
+                print(
+                    f"Mapping: {id_mapping_db.old_bigg_id} -> {id_mapping_db.new_universal_component.bigg_id}"
+                )
+                universal_id = id_mapping_db.new_universal_component.bigg_id
             parsed_participants.append((p[0], side, universal_id, compartment, charge))
     return parsed_participants
 
@@ -204,11 +182,11 @@ def find_reference_reaction(proposed_ids, parsed_participants, session):
 
     db_entries = []
     for rhea_id in proposed_ids:
-        db_entry = (
-            session.query(ReferenceReaction)
-            .filter(ReferenceReaction.id == rhea_id)
-            .first()
-        )
+        db_entry = session.scalars(
+            select(ReferenceReaction)
+            .filter(ReferenceReaction.bigg_id == rhea_id)
+            .limit(1)
+        ).first()
         if db_entry:
             db_entries.append(db_entry)
 
@@ -236,6 +214,7 @@ def find_reference_reaction(proposed_ids, parsed_participants, session):
         for parsed_participant in parsed_participants:
             rrp_alias = aliased(ReferenceReactionParticipant)
             crm_alias = aliased(ComponentReferenceMapping)
+            uc_alias = aliased(UniversalComponent)
             stmt = (
                 stmt.join(
                     rrp_alias,
@@ -243,11 +222,10 @@ def find_reference_reaction(proposed_ids, parsed_participants, session):
                 )
                 .join(
                     crm_alias,
-                    crm_alias.reference_id == rrp_alias.compound_id,
+                    crm_alias.reference_compound_id == rrp_alias.compound_id,
                 )
-                .filter(
-                    crm_alias.universal_id == cast(parsed_participant[2], COL_ID_STR)
-                )
+                .join(uc_alias, uc_alias.id == crm_alias.universal_component_id)
+                .filter(uc_alias.bigg_id == parsed_participant[2])
             )
         rrp_count_alias = aliased(ReferenceReactionParticipant)
         subq = (
@@ -259,7 +237,7 @@ def find_reference_reaction(proposed_ids, parsed_participants, session):
             .subquery()
         )
         stmt = stmt.join(subq, subq.c.reaction_id == ReferenceReaction.id).filter(
-            subq.c.count == cast(len(parsed_participants), Integer)
+            subq.c.count == len(parsed_participants)
         )
 
         db_entries = set(stmt.all())
@@ -349,11 +327,11 @@ def push_reactions(data, session):
             session=session,
         )
 
-        universal_reaction_db = (
-            session.query(UniversalReaction)
-            .filter(UniversalReaction.id == bigg_id)
-            .first()
-        )
+        universal_reaction_db = session.scalars(
+            select(UniversalReaction)
+            .filter(UniversalReaction.bigg_id == bigg_id)
+            .limit(1)
+        ).first()
         # if not universal_reaction_db:
         #     universal_reaction_db = UniversalReaction(
         #         id=bigg_id, name=db_entry.name, reference_id=db_entry.id
@@ -366,6 +344,12 @@ def push_reactions(data, session):
         #
 
         reaction_model_id = reaction_data.get("model_id")
+        if reaction_model_id is None:
+            reaction_model = None
+        else:
+            reaction_model = session.scalars(
+                select(Model).filter(Model.bigg_id == reaction_model_id).limit(1)
+            ).first()
 
         universal_reaction_matrix_info = []
         reaction_matrix_info = []
@@ -375,48 +359,54 @@ def push_reactions(data, session):
 
         if reference_db is not None and m is not None:
             print("Using found reference")
-            for participant, compound, crmapping in m[3]:
+            for participant, crmapping in m[3]:
+                component = session.scalars(
+                    select(Component)
+                    .where(Component.id == crmapping.component_id)
+                    .join(Component.universal_component)
+                ).first()
                 compartment = m[1][participant.compartment]
-                universal_id = f"{compound.universal_id}_{compartment}"
-                comp_comp_id = f"{universal_id}:{compound.charge}"
+                universal_id = f"{component.universal_component.bigg_id}_{compartment}"
+                comp_comp_id = f"{universal_id}:{component.charge}"
 
-                compartment_db = (
-                    session.query(Compartment)
-                    .filter(Compartment.id == compartment)
-                    .first()
-                )
+                compartment_db = session.scalars(
+                    select(Compartment)
+                    .filter(Compartment.bigg_id == compartment)
+                    .limit(1)
+                ).first()
                 if not compartment_db:
-                    compartment_db = Compartment(id=compartment, name=compartment)
+                    compartment_db = Compartment(bigg_id=compartment, name=compartment)
                     session.add(compartment_db)
 
-                universal_compartmentalized_component_db = (
-                    session.query(UniversalCompartmentalizedComponent)
-                    .filter(UniversalCompartmentalizedComponent.id == universal_id)
-                    .first()
-                )
+                universal_compartmentalized_component_db = session.scalars(
+                    select(UniversalCompartmentalizedComponent)
+                    .filter(UniversalCompartmentalizedComponent.bigg_id == universal_id)
+                    .limit(1)
+                ).first()
                 if not universal_compartmentalized_component_db:
                     universal_compartmentalized_component_db = (
                         UniversalCompartmentalizedComponent(
-                            id=universal_id,
-                            universal_component_id=compound.universal_id,
-                            compartment_id=compartment_db.id,
+                            bigg_id=universal_id,
+                            universal_component_id=component.universal_component_id,
+                            compartment=compartment_db,
                         )
                     )
                     session.add(universal_compartmentalized_component_db)
 
-                compartmentalized_component_db = (
-                    session.query(CompartmentalizedComponent)
-                    .filter(CompartmentalizedComponent.id == comp_comp_id)
-                    .first()
-                )
+                compartmentalized_component_db = session.scalars(
+                    select(CompartmentalizedComponent)
+                    .filter(CompartmentalizedComponent.bigg_id == comp_comp_id)
+                    .limit(1)
+                ).first()
                 if not compartmentalized_component_db:
                     compartmentalized_component_db = CompartmentalizedComponent(
-                        id=comp_comp_id,
-                        component_id=compound.id,
-                        universal_id=universal_compartmentalized_component_db.id,
-                        compartment_id=compartment_db.id,
+                        bigg_id=comp_comp_id,
+                        universal_compartmentalized_component=universal_compartmentalized_component_db,
+                        compartment=compartment_db,
                     )
-                    session.add(compartmentalized_component_db)
+                    component.compartmentalized_components.append(
+                        compartmentalized_component_db
+                    )
 
                 part_coeff = participant.coefficient
                 try:
@@ -429,8 +419,8 @@ def push_reactions(data, session):
                 )
                 # TODO: Check if exists
                 universal_reaction_matrix_info_item = dict(
-                    universal_compartmentalized_component_id=universal_compartmentalized_component_db.id,
-                    reference_reaction_participant_id=participant.id,
+                    universal_compartmentalized_component=universal_compartmentalized_component_db,
+                    reference_reaction_participant=participant,
                     coefficient=coefficient,
                 )
                 universal_reaction_matrix_info.append(
@@ -446,7 +436,7 @@ def push_reactions(data, session):
                 reaction_matrix_info.append(
                     dict(
                         reaction_matrix=universal_reaction_matrix_info_item,
-                        compartmentalized_component_id=compartmentalized_component_db.id,
+                        compartmentalized_component=compartmentalized_component_db,
                         coefficient=coefficient,
                     )
                 )
@@ -457,8 +447,8 @@ def push_reactions(data, session):
                 print("Proceeding without reference")
                 if charge is None:
                     print("Charge is None")
-                    comp_db = (
-                        session.query(Component)
+                    comp_db = session.scalars(
+                        select(Component)
                         .join(
                             ComponentReferenceMapping,
                             ComponentReferenceMapping.component_id == Component.id,
@@ -468,32 +458,35 @@ def push_reactions(data, session):
                             UniversalComponentReferenceMapping.mapping_id
                             == ComponentReferenceMapping.id,
                         )
-                        .filter(UniversalComponentReferenceMapping.id == universal_id)
-                        .first()
-                    )
+                        .join(Component.universal_component)
+                        .filter(UniversalComponent.bigg_id == universal_id)
+                        .limit(1)
+                    ).first()
                     if comp_db is not None:
                         charge = comp_db.charge
                 else:
                     print(f"Charge is {charge}")
                     charge = float(charge)
-                    comp_db = (
-                        session.query(Component)
+                    comp_db = session.scalars(
+                        select(Component)
+                        .join(Component.universal_component)
                         .filter(
-                            (Component.universal_id == universal_id)
+                            (Component.universal_component.bigg_id == universal_id)
                             & (Component.charge == charge)
                         )
-                        .first()
-                    )
+                        .limit(1)
+                    ).first()
                 if charge is None and comp_db is None:
                     charge = 0
-                    comp_db = (
-                        session.query(Component)
+                    comp_db = session.scalars(
+                        select(Component)
+                        .join(Component.universal_component)
                         .filter(
-                            (Component.universal_id == universal_id)
+                            (UniversalComponent.bigg_id == universal_id)
                             & (Component.charge == charge)
                         )
-                        .first()
-                    )
+                        .limit(1)
+                    ).first()
                 if charge is None or comp_db is None:
                     print(
                         f"No proper charge + component combination for {charge}, {universal_id}"
@@ -508,51 +501,54 @@ def push_reactions(data, session):
                 universal_comp_comp_id = f"{universal_id}_{compartment_id}"
                 comp_comp_id = f"{universal_comp_comp_id}:{charge}"
 
-                compartment_db = (
-                    session.query(Compartment)
-                    .filter(Compartment.id == compartment_id)
-                    .first()
-                )
+                compartment_db = session.scalars(
+                    select(Compartment)
+                    .filter(Compartment.bigg_id == compartment_id)
+                    .limit(1)
+                ).first()
                 if not compartment_db:
-                    compartment_db = Compartment(id=compartment_id, name=compartment_id)
+                    compartment_db = Compartment(
+                        bigg_id=compartment_id, name=compartment_id
+                    )
                     session.add(compartment_db)
 
-                universal_compartmentalized_component_db = (
-                    session.query(UniversalCompartmentalizedComponent)
+                universal_compartmentalized_component_db = session.scalars(
+                    select(UniversalCompartmentalizedComponent)
                     .filter(
-                        UniversalCompartmentalizedComponent.id == universal_comp_comp_id
+                        UniversalCompartmentalizedComponent.bigg_id
+                        == universal_comp_comp_id
                     )
-                    .first()
-                )
+                    .limit(1)
+                ).first()
                 if not universal_compartmentalized_component_db:
                     universal_compartmentalized_component_db = (
                         UniversalCompartmentalizedComponent(
-                            id=universal_comp_comp_id,
-                            universal_component_id=universal_id,
-                            compartment_id=compartment_db.id,
+                            bigg_id=universal_comp_comp_id,
+                            universal_component=comp_db.universal_component,
+                            compartment=compartment_db,
                         )
                     )
                     session.add(universal_compartmentalized_component_db)
 
-                compartmentalized_component_db = (
-                    session.query(CompartmentalizedComponent)
-                    .filter(CompartmentalizedComponent.id == comp_comp_id)
-                    .first()
-                )
+                compartmentalized_component_db = session.scalars(
+                    select(CompartmentalizedComponent)
+                    .filter(CompartmentalizedComponent.bigg_id == comp_comp_id)
+                    .limit(1)
+                ).first()
                 if not compartmentalized_component_db:
                     compartmentalized_component_db = CompartmentalizedComponent(
-                        id=comp_comp_id,
-                        component_id=comp_db.id,
-                        universal_id=universal_compartmentalized_component_db.id,
-                        compartment_id=compartment_db.id,
+                        bigg_id=comp_comp_id,
+                        component=comp_db,
+                        universal_compartmentalized_component=universal_compartmentalized_component_db,
+                        compartment=compartment_db,
                     )
                     session.add(compartmentalized_component_db)
 
                 coefficient = (-1 if side == "L" else 1) * float(coeff)
                 # TODO: Check if exists
                 universal_reaction_matrix_info_item = dict(
-                    universal_compartmentalized_component_id=universal_compartmentalized_component_db.id,
-                    reference_reaction_participant_id=None,
+                    universal_compartmentalized_component=universal_compartmentalized_component_db,
+                    reference_reaction_participant=None,
                     coefficient=coefficient,
                 )
                 universal_reaction_matrix_info.append(
@@ -561,7 +557,7 @@ def push_reactions(data, session):
                 reaction_matrix_info.append(
                     dict(
                         reaction_matrix=universal_reaction_matrix_info_item,
-                        compartmentalized_component_id=compartmentalized_component_db.id,
+                        compartmentalized_component=compartmentalized_component_db,
                         coefficient=coefficient,
                     )
                 )
@@ -574,15 +570,15 @@ def push_reactions(data, session):
         )
         universal_reaction_bigg_id = None
         if universal_reaction_db is not None:
-            universal_reaction_bigg_id = universal_reaction_db.id
-        universal_reaction_db = (
-            session.query(UniversalReaction)
+            universal_reaction_bigg_id = universal_reaction_db.bigg_id
+        universal_reaction_db = session.scalars(
+            select(UniversalReaction)
             .filter(UniversalReaction.hash == universal_reaction_hash)
-            .first()
-        )
+            .limit(1)
+        ).first()
         print(f"universal hash 1: {universal_reaction_hash}")
         if universal_reaction_bigg_id is not None and universal_reaction_db is not None:
-            if universal_reaction_bigg_id != universal_reaction_db.id:
+            if universal_reaction_bigg_id != universal_reaction_db.bigg_id:
                 print(
                     "ERROR: No match between already existing universal reaction and newly proposed reaction."
                 )
@@ -594,92 +590,95 @@ def push_reactions(data, session):
             if reaction_name is None and reference_db is not None:
                 reaction_name = reference_db.name
             universal_reaction_db = UniversalReaction(
-                id=bigg_id,
+                bigg_id=bigg_id,
                 name=reaction_name,
-                reference_id=(None if reference_db is None else reference_db.id),
+                reference=reference_db,
                 hash=universal_reaction_hash,
             )
             session.add(universal_reaction_db)
 
             for urm in universal_reaction_matrix_info:
-                urm["universal_id"] = universal_reaction_db.id
+                urm["universal_reaction"] = universal_reaction_db
                 urm_db = UniversalReactionMatrix(
-                    universal_id=urm["universal_id"],
-                    universal_compartmentalized_component_id=urm[
-                        "universal_compartmentalized_component_id"
+                    universal_reaction=urm["universal_reaction"],
+                    universal_compartmentalized_component=urm[
+                        "universal_compartmentalized_component"
                     ],
-                    reference_reaction_participant_id=urm[
-                        "reference_reaction_participant_id"
+                    reference_reaction_participant=urm[
+                        "reference_reaction_participant"
                     ],
                     coefficient=urm["coefficient"],
                 )
                 session.add(urm_db)
-                session.commit()
-                urm["id"] = urm_db.id
+                # session.commit()
+                urm["urm"] = urm_db
         else:
             for urm in universal_reaction_matrix_info:
                 urm_db = None
                 for direction in [1, -1]:
-                    urm_db = (
-                        session.query(UniversalReactionMatrix)
+                    urm_db = session.scalars(
+                        select(UniversalReactionMatrix)
                         .filter(
                             (
-                                UniversalReactionMatrix.universal_id
-                                == universal_reaction_db.id
+                                UniversalReactionMatrix.universal_reaction
+                                == universal_reaction_db
                             )
                             & (
-                                UniversalReactionMatrix.universal_compartmentalized_component_id
-                                == urm["universal_compartmentalized_component_id"]
+                                UniversalReactionMatrix.universal_compartmentalized_component
+                                == urm["universal_compartmentalized_component"]
                             )
                             & (
                                 UniversalReactionMatrix.coefficient
                                 == direction * urm["coefficient"]
                             )
                         )
-                        .first()
-                    )
+                        .limit(1)
+                    ).first()
                     if urm_db is not None:
                         break
                 if urm_db is None:
                     print("ERROR: Cannot find correct universal reaction matrix info.")
-                urm["id"] = urm_db.id
+                urm["urm"] = urm_db
 
         reaction_hash = Reaction.generate_hash(reaction_matrix_info)
         print(f"reaction hash 2: {reaction_hash}")
-        reaction_db = (
-            session.query(Reaction)
+        reaction_db = session.scalars(
+            select(Reaction)
+            .join(Reaction.model)
             .filter(
-                (Reaction.hash == reaction_hash)
-                & (Reaction.model_id == reaction_model_id)
+                (Reaction.hash == reaction_hash) & (Reaction.model == reaction_model)
             )
-            .first()
-        )
+            .limit(1)
+        ).first()
+
         if not reaction_db:
             print("Creating new reaction")
             copy_number = (
-                session.query(Reaction)
-                .filter(Reaction.universal_id == universal_reaction_db.id)
-                .count()
+                session.scalar(
+                    select(func.count(Reaction.id)).filter(
+                        Reaction.universal_reaction == universal_reaction_db
+                    )
+                )
                 + 1
             )
-            reaction_id = Reaction.create_id(universal_reaction_db.id, copy_number)
+            reaction_id = Reaction.create_id(universal_reaction_db.bigg_id, copy_number)
             reaction_db = Reaction(
-                id=reaction_id,
+                bigg_id=reaction_id,
                 hash=reaction_hash,
-                model_id=reaction_model_id,
+                model=reaction_model,
                 copy_number=copy_number,
-                universal_id=universal_reaction_db.id,
+                universal_reaction=universal_reaction_db,
             )
             session.add(reaction_db)
-            session.commit()
+            # session.commit()
             for rm in reaction_matrix_info:
                 reaction_matrix_db = ReactionMatrix(
-                    reaction_id=reaction_db.id,
-                    reaction_matrix_id=rm["reaction_matrix"]["id"],
-                    compartmentalized_component_id=rm["compartmentalized_component_id"],
+                    reaction=reaction_db,
+                    universal_reaction_matrix=rm["reaction_matrix"]["urm"],
+                    compartmentalized_component=rm["compartmentalized_component"],
                 )
                 session.add(reaction_matrix_db)
-            session.commit()
+            # session.commit()
         else:
             print(reaction_db)
         session.commit()

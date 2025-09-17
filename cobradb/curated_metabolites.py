@@ -1,19 +1,12 @@
 # -*- coding: utf-8 -*-
 
+from sqlalchemy import select
 from cobradb.models import *
-from cobradb import metabolites, settings
+from cobradb import metabolites
 from cobradb.util import timing
 
-from sqlalchemy import func
-import re
 import logging
 import json
-from libchebipy import ChebiEntity
-
-import time
-
-from pprint import pprint
-import re
 
 
 def load_bigg_id_data(filename):
@@ -24,9 +17,9 @@ def load_bigg_id_data(filename):
 @timing
 def push_metabolites(data, session):
     for ch, chebi_info in data["chebis"].items():
-        chebi_db = (
-            session.query(ReferenceCompound).filter(ReferenceCompound.id == ch).first()
-        )
+        chebi_db = session.scalars(
+            select(ReferenceCompound).filter(ReferenceCompound.bigg_id == ch).limit(1)
+        ).first()
         if chebi_db:
             print(f"Chebi {ch} already exists: ({chebi_info}) ({chebi_db})")
             # if chebi_info["charge"] is not None and hasattr(chebi_db, "charge"):
@@ -40,15 +33,15 @@ def push_metabolites(data, session):
                 if chebi_info.get("inchi"):
                     inchi_obj = InChI.from_string(chebi_info["inchi"])
                     if inchi_obj is not None:
-                        inchi_db = (
-                            session.query(InChI)
+                        inchi_db = session.scalars(
+                            select(InChI)
                             .filter(
                                 (InChI.key_major == inchi_obj.key_major)
                                 & (InChI.key_minor == inchi_obj.key_minor)
                                 & (InChI.key_proton == inchi_obj.key_proton)
                             )
-                            .first()
-                        )
+                            .limit(1)
+                        ).first()
                         if inchi_obj != inchi_db:
                             inchi_db = None
                         if inchi_db is None:
@@ -57,12 +50,12 @@ def push_metabolites(data, session):
                             session.commit()
                 print(f"Creating new entry for {ch}")
                 chebi_db = ReferenceCompound(
-                    id=ch,
+                    bigg_id=ch,
                     name=chebi_info["name"],
                     formula=chebi_info["formula"],
                     charge=str(chebi_info.get("charge", 0)),
                     compound_type="small_molecule",
-                    inchi_id=(inchi_db.id if inchi_db is not None else None),
+                    inchi=inchi_db,
                 )
                 session.add(chebi_db)
             else:
@@ -76,23 +69,23 @@ def push_metabolites(data, session):
         metabolites.create_metabolite(bid, bid_info["chebis"][0], session)
 
     for old_id, new_id in data.get("bigg_id_mapping", {}).items():
-        id_mapping_db = (
-            session.query(ComponentIDMapping)
-            .filter(ComponentIDMapping.old_id == old_id)
-            .first()
-        )
+        id_mapping_db = session.scalars(
+            select(ComponentIDMapping)
+            .filter(ComponentIDMapping.old_bigg_id == old_id)
+            .limit(1)
+        ).first()
         if id_mapping_db is not None:
             continue
-        new_component_db = (
-            session.query(UniversalComponent.id)
-            .filter(UniversalComponent.id == new_id)
-            .first()
-        )
+        new_component_db = session.scalars(
+            select(UniversalComponent.id)
+            .filter(UniversalComponent.bigg_id == new_id)
+            .limit(1)
+        ).first()
         if new_component_db is None:
             continue
         id_mapping_db = ComponentIDMapping(
-            old_id=old_id,
-            new_id=new_id,
+            old_bigg_id=old_id,
+            new_id=new_component_db,
         )
         session.add(id_mapping_db)
     session.commit()

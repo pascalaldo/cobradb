@@ -1,20 +1,16 @@
 # -*- coding: utf-8 -*-
 
+from sqlalchemy import select
 from cobradb.metabolites import get_or_create_small_molecule_reference
 from cobradb.models import *
-from cobradb import settings
 from cobradb.util import timing
 
-from sqlalchemy import func
 import re
 import logging
-
-import time
 
 from rdflib import Graph, Namespace
 from rdflib.namespace import RDF
 from libchebipy import ChebiEntity
-from pprint import pprint
 import re
 
 RHEA = Namespace("http://rdf.rhea-db.org/")
@@ -30,83 +26,90 @@ EC_URI_PATTERN = re.compile(r"https?://purl\.uniprot\.org/enzyme/([0-9\.\-n]+)")
 def create_hierarchical_conversion_reaction(lhs_chebi, rhs_chebi, session):
     if lhs_chebi.get_charge() != rhs_chebi.get_charge():
         return
-    reaction_id = f"HIER:{lhs_chebi.get_id()}_{rhs_chebi.get_id()}"
-    reference_reaction_db = (
-        session.query(ReferenceReaction)
-        .filter(ReferenceReaction.id == reaction_id)
-        .first()
-    )
+    reaction_bigg_id = f"HIER:{lhs_chebi.get_id()}_{rhs_chebi.get_id()}"
+    reference_reaction_db = session.scalars(
+        select(ReferenceReaction)
+        .filter(ReferenceReaction.bigg_id == reaction_bigg_id)
+        .limit(1)
+    ).first()
     if reference_reaction_db is not None:
         return
     reference_reaction_db = ReferenceReaction(
-        id=reaction_id,
+        bigg_id=reaction_bigg_id,
         name=f"Conversion of {lhs_chebi.get_id()} to {rhs_chebi.get_id()}, because one is an instance of the other.",
         equation=f"{lhs_chebi.get_name()} = {rhs_chebi.get_name()}",
     )
     session.add(reference_reaction_db)
+    lhs_compound = session.scalars(
+        select(ReferenceCompound)
+        .filter(ReferenceCompound.bigg_id == lhs_chebi.get_id())
+        .limit(1)
+    ).first()
     lhs_part = ReferenceReactionParticipant(
-        reaction_id=reaction_id,
-        compound_id=lhs_chebi.get_id(),
+        compound=lhs_compound,
         side="L",
         coefficient="1",
         compartment="0",
     )
-    session.add(lhs_part)
+    reference_reaction_db.reaction_participants.append(lhs_part)
+    rhs_compound = session.scalars(
+        select(ReferenceCompound)
+        .filter(ReferenceCompound.bigg_id == rhs_chebi.get_id())
+        .limit(1)
+    ).first()
     rhs_part = ReferenceReactionParticipant(
-        reaction_id=reaction_id,
-        compound_id=rhs_chebi.get_id(),
+        compound=rhs_compound,
         side="R",
         coefficient="1",
         compartment="0",
     )
-    session.add(rhs_part)
+    reference_reaction_db.reaction_participants.append(rhs_part)
 
 
 CHEBI_PROTONATION_RELATIONS = ["is_conjugate_acid_of", "is_conjugate_base_of"]
 
 
 def add_reference_exchange_reactions(compound_db, session):
-    reaction_id = f"EX:{compound_db.id}"
-    reference_reaction_db = (
-        session.query(ReferenceReaction)
-        .filter(ReferenceReaction.id == reaction_id)
-        .first()
-    )
+    reaction_bigg_id = f"EX:{compound_db.bigg_id}"
+    reference_reaction_db = session.scalars(
+        select(ReferenceReaction)
+        .filter(ReferenceReaction.bigg_id == reaction_bigg_id)
+        .limit(1)
+    ).first()
     if reference_reaction_db is not None:
         return
     compound_name = compound_db.name if compound_db.name else compound_db.id
     reference_reaction_db = ReferenceReaction(
-        id=reaction_id,
+        bigg_id=reaction_bigg_id,
         name=f"Exchange of {compound_name}.",
         equation=f"{compound_name} = ∅",
     )
     session.add(reference_reaction_db)
     lhs_part = ReferenceReactionParticipant(
-        reaction_id=reaction_id,
         compound_id=compound_db.id,
         side="L",
         coefficient="1",
         compartment="0",
     )
-    session.add(lhs_part)
+    reference_reaction_db.reaction_participants.append(lhs_part)
     session.commit()
 
 
 def add_reference_conversion_reactions(compound_db, session):
-    if not compound_db.id.startswith("CHEBI:"):
+    if not compound_db.bigg_id.startswith("CHEBI:"):
         return
-    chebi_entity = ChebiEntity(compound_db.id)
+    chebi_entity = ChebiEntity(compound_db.bigg_id)
     main_charge = chebi_entity.get_charge()
 
     outgoing_rel = chebi_entity.get_outgoings()
     for rel in outgoing_rel:
         if rel._Relation__typ in CHEBI_PROTONATION_RELATIONS:
             rel_chebi = f"CHEBI:{rel._Relation__target_chebi_id}"
-            rel_chebi_db = (
-                session.query(ReferenceCompound)
-                .filter(ReferenceCompound.id == rel_chebi)
-                .first()
-            )
+            rel_chebi_db = session.scalars(
+                select(ReferenceCompound)
+                .filter(ReferenceCompound.bigg_id == rel_chebi)
+                .limit(1)
+            ).first()
             if rel_chebi_db is None:
                 continue
             rel_chebi_entity = ChebiEntity(rel_chebi)
@@ -121,63 +124,75 @@ def add_reference_conversion_reactions(compound_db, session):
                 lhs_chebi = rel_chebi_entity
                 rhs_chebi = chebi_entity
             n_h_plus = rhs_chebi.get_charge() - lhs_chebi.get_charge()
-            reaction_id = f"PROT:{lhs_chebi.get_id()}_{rhs_chebi.get_id()}"
-            reference_reaction_db = (
-                session.query(ReferenceReaction)
-                .filter(ReferenceReaction.id == reaction_id)
-                .first()
-            )
+            reaction_bigg_id = f"PROT:{lhs_chebi.get_id()}_{rhs_chebi.get_id()}"
+            reference_reaction_db = session.scalars(
+                select(ReferenceReaction)
+                .filter(ReferenceReaction.bigg_id == reaction_bigg_id)
+                .limit(1)
+            ).first()
             if reference_reaction_db is not None:
                 continue
             reference_reaction_db = ReferenceReaction(
-                id=reaction_id,
+                bigg_id=reaction_bigg_id,
                 name=f"Protonation of {lhs_chebi.get_id()} to {rhs_chebi.get_id()}.",
                 equation=f"{lhs_chebi.get_name()} + {n_h_plus} H+ = {rhs_chebi.get_name()}",
             )
             session.add(reference_reaction_db)
+            lhs_compound = session.scalars(
+                select(ReferenceCompound)
+                .filter(ReferenceCompound.bigg_id == lhs_chebi.get_id())
+                .limit(1)
+            ).first()
             lhs_part = ReferenceReactionParticipant(
-                reaction_id=reaction_id,
-                compound_id=lhs_chebi.get_id(),
+                compound=lhs_compound,
                 side="L",
                 coefficient="1",
                 compartment="0",
             )
-            session.add(lhs_part)
+            reference_reaction_db.reaction_participants.append(lhs_part)
+            rhs_compound = session.scalars(
+                select(ReferenceCompound)
+                .filter(ReferenceCompound.bigg_id == rhs_chebi.get_id())
+                .limit(1)
+            ).first()
             rhs_part = ReferenceReactionParticipant(
-                reaction_id=reaction_id,
-                compound_id=rhs_chebi.get_id(),
+                compound=rhs_compound,
                 side="R",
                 coefficient="1",
                 compartment="0",
             )
-            session.add(rhs_part)
+            reference_reaction_db.reaction_participants.append(rhs_part)
+            proton_compound = session.scalars(
+                select(ReferenceCompound)
+                .filter(ReferenceCompound.bigg_id == "CHEBI:15378")
+                .limit(1)
+            ).first()
             proton_part = ReferenceReactionParticipant(
-                reaction_id=reaction_id,
-                compound_id="CHEBI:15378",
+                compound=proton_compound,
                 side="L",
                 coefficient="1",
                 compartment="0",
             )
-            session.add(proton_part)
+            reference_reaction_db.reaction_participants.append(proton_part)
             session.commit()
         elif rel._Relation__typ == "is_a":
             rel_chebi = f"CHEBI:{rel._Relation__target_chebi_id}"
-            rel_chebi_db = (
-                session.query(ReferenceCompound)
-                .filter(ReferenceCompound.id == rel_chebi)
-                .first()
-            )
+            rel_chebi_db = session.scalars(
+                select(ReferenceCompound)
+                .filter(ReferenceCompound.bigg_id == rel_chebi)
+                .limit(1)
+            ).first()
             rel_chebi_entity = ChebiEntity(rel_chebi)
             if rel_chebi_db is None:
                 # Look for relations where one step is skipped in our DB.
                 for rel_2 in rel_chebi_entity.get_outgoings():
                     if rel_2._Relation__typ == "is_a":
                         rel_2_chebi = f"CHEBI:{rel_2._Relation__target_chebi_id}"
-                        rel_chebi_db = (
-                            session.query(ReferenceCompound)
-                            .filter(ReferenceCompound.id == rel_2_chebi)
-                            .first()
-                        )
+                        rel_chebi_db = session.scalars(
+                            select(ReferenceCompound)
+                            .filter(ReferenceCompound.bigg_id == rel_2_chebi)
+                            .limit(1)
+                        ).first()
                         if rel_chebi_db is None:
                             continue
                         rel_chebi_entity = ChebiEntity(rel_2_chebi)
@@ -195,22 +210,22 @@ def add_reference_conversion_reactions(compound_db, session):
     for rel in incoming_rel:
         if rel._Relation__typ == "is_a":
             rel_chebi = f"CHEBI:{rel._Relation__target_chebi_id}"
-            rel_chebi_db = (
-                session.query(ReferenceCompound)
-                .filter(ReferenceCompound.id == rel_chebi)
-                .first()
-            )
+            rel_chebi_db = session.scalars(
+                select(ReferenceCompound)
+                .filter(ReferenceCompound.bigg_id == rel_chebi)
+                .limit(1)
+            ).first()
             rel_chebi_entity = ChebiEntity(rel_chebi)
             if rel_chebi_db is None:
                 # Look for relations where one step is skipped in our DB.
                 for rel_2 in rel_chebi_entity.get_incomings():
                     if rel_2._Relation__typ == "is_a":
                         rel_2_chebi = f"CHEBI:{rel_2._Relation__target_chebi_id}"
-                        rel_chebi_db = (
-                            session.query(ReferenceCompound)
-                            .filter(ReferenceCompound.id == rel_2_chebi)
-                            .first()
-                        )
+                        rel_chebi_db = session.scalars(
+                            select(ReferenceCompound)
+                            .filter(ReferenceCompound.bigg_id == rel_2_chebi)
+                            .limit(1)
+                        ).first()
                         if rel_chebi_db is None:
                             continue
                         rel_chebi_entity = ChebiEntity(rel_2_chebi)
@@ -227,14 +242,16 @@ def add_reference_conversion_reactions(compound_db, session):
 
 @timing
 def push_rhea_reference(rhea_db, session):
-    for rp_id, reactive_part in rhea_db["reactive_parts"].items():
+    n_reactive_parts = len(rhea_db["reactive_parts"])
+    for i, (rp_id, reactive_part) in enumerate(rhea_db["reactive_parts"].items()):
+        print(f"RHEA: Reactive Part {i+1}/{n_reactive_parts}")
         if rp_id.startswith("CHEBI:"):
-            get_or_create_small_molecule_reference(
+            _existed, reactive_part_db = get_or_create_small_molecule_reference(
                 rp_id, session, cpd_cls=ReferenceReactivePart
             )
         else:
             reactive_part_db = ReferenceReactivePart(
-                id=rp_id,
+                bigg_id=rp_id,
                 name=reactive_part["name"],
                 html_name=reactive_part["html_name"],
                 formula=reactive_part["formula"],
@@ -242,63 +259,87 @@ def push_rhea_reference(rhea_db, session):
             )
             session.add(reactive_part_db)
     session.commit()
-    for cp_id, compound in rhea_db["compounds"].items():
+    session.close()
+
+    n_compounds = len(rhea_db["compounds"])
+    for i, (cp_id, compound) in enumerate(rhea_db["compounds"].items()):
+        print(f"RHEA: Compound {i+1}/{n_compounds}")
         if cp_id.startswith("CHEBI:"):
             _existed, compound_db = get_or_create_small_molecule_reference(
                 cp_id, session
             )
         else:
             compound_db = ReferenceCompound(
-                id=cp_id,
+                bigg_id=cp_id,
                 name=compound["name"],
                 html_name=compound["html_name"],
                 formula=compound.get("formula"),
                 charge=compound.get("charge"),
                 compound_type=compound["type"],
             )
-            session.add(compound_db)
             for reactive_part in compound.get("reactive_parts", []):
+                reactive_part_db = session.scalars(
+                    select(ReferenceReactivePart)
+                    .filter(ReferenceReactivePart.bigg_id == reactive_part)
+                    .limit(1)
+                ).first()
                 reactive_part_matrix_db = ReferenceReactivePartMatrix(
-                    compound_id=cp_id,
-                    reactive_part_id=reactive_part,
+                    reactive_part=reactive_part_db,
                 )
-                session.add(reactive_part_matrix_db)
+                compound_db.reactive_part_matrix.append(reactive_part_matrix_db)
+            session.add(compound_db)
         session.commit()
         add_reference_conversion_reactions(compound_db, session)
         add_reference_exchange_reactions(compound_db, session)
     session.commit()
-    for rx_id, reaction in rhea_db["reactions"].items():
+    session.close()
+
+    n_reactions = len(rhea_db["reactions"])
+    for i, (rx_id, reaction) in enumerate(rhea_db["reactions"].items()):
+        print(f"RHEA: Reaction {i+1}/{n_reactions}")
         reaction_db = ReferenceReaction(
-            id=rx_id,
+            bigg_id=rx_id,
             equation=reaction["equation"],
         )
         session.add(reaction_db)
         for side_n, coefficient, compound_id, compartment in reaction["participants"]:
+            compound_db = session.scalars(
+                select(ReferenceCompound)
+                .filter(ReferenceCompound.bigg_id == compound_id)
+                .limit(1)
+            ).first()
             participant_db = ReferenceReactionParticipant(
-                reaction_id=rx_id,
-                compound_id=compound_id,
+                compound=compound_db,
                 side="L" if side_n < 0 else "R",
                 coefficient=coefficient,
                 compartment=compartment,
             )
-            session.add(participant_db)
+            reaction_db.reaction_participants.append(participant_db)
     session.commit()
+    session.close()
 
 
 @timing
 def load_rhea(rhea_filepath, session):
-    logging.debug("Loading RHEA reference data")
+    logging.warning("Loading RHEA reference data")
 
     graph = load_rhea_rdf(rhea_filepath)
+
+    # graph.serialize(destination=f"/chebi/rhea.ttl")
+    # graph.serialize(destination=f"/chebi/rhea.nt", format="nt")
+
+    logging.warning("Extracting reactions")
     rhea_db = extract_reactions(graph)
 
+    logging.warning("Pushing reactions to DB")
     push_rhea_reference(rhea_db, session)
 
 
 # Load RDF file
 def load_rhea_rdf(file_path):
     g = Graph()
-    g.parse(file_path, format="xml")  # RDF/XML format
+    # g.parse(file_path, format="xml")  # RDF/XML format
+    g.parse(file_path)
     return g
 
 

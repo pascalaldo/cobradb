@@ -7,7 +7,7 @@ from cobradb.util import scrub_gene_id, get_or_create_data_source, get_or_create
 import sys, os, math, re
 from os.path import basename
 from warnings import warn
-from sqlalchemy import text, or_, and_, func
+from sqlalchemy import select, text, or_, and_, func
 import logging
 import six
 import itertools as it
@@ -115,35 +115,33 @@ def load_gene_synonym(session, gene_db, synonym, data_source_id):
 def collect_gene_synonym(synonym_collection, gene_db, synonym, data_source_id):
     if not data_source_id in synonym_collection:
         synonym_collection[data_source_id] = set()
-    synonym_collection[data_source_id].add((synonym, gene_db.id))
+    synonym_collection[data_source_id].add((synonym, gene_db))
 
 
 def insert_synonyms(session, synonym_collection):
     from sqlalchemy.dialects.postgresql import insert
 
-    syns = []
+    # syns = []
     for data_source_id, synonyms in synonym_collection.items():
-        data_source_id = get_or_create_data_source(session, data_source_id)
-        for syn, gene_id in synonyms:
-            syns.append(
-                dict(
-                    type="gene",
-                    ome_id=gene_id,
-                    synonym=syn,
-                    data_source_id=data_source_id,
-                )
+        data_source_db = get_or_create_data_source(session, data_source_id)
+        for syn, gene_db in synonyms:
+            synonym = Synonym(
+                type="gene",
+                ome_id=gene_db.id,
+                synonym=syn,
             )
-    stmt = insert(Synonym).values(syns)
-    stmt = stmt.on_conflict_do_nothing(
-        index_elements=[
-            Synonym.type,
-            Synonym.ome_id,
-            Synonym.synonym,
-            Synonym.data_source_id,
-        ]
-    )
-    session.execute(stmt)
-    session.commit()
+            data_source_db.synonyms.append(synonym)
+    # stmt = insert(Synonym).values(syns)
+    # stmt = stmt.on_conflict_do_nothing(
+    #     index_elements=[
+    #         Synonym.type,
+    #         Synonym.ome_id,
+    #         Synonym.synonym,
+    #         Synonym.data_source,
+    #     ]
+    # )
+    # session.execute(stmt)
+    # session.commit()
 
 
 def _get_qual(feat, name, get_first=False):
@@ -184,16 +182,19 @@ def load_assembly(assembly_id, assembly_path, chromosome_accessions, session):
 
     # check that the genome doesn't already exist
     if (
-        session.query(Genome)
-        .filter(Genome.accession_type == "ncbi_assembly")
-        .filter(Genome.accession_value == assembly_id)
-    ).count() > 0:
+        session.scalar(
+            select(func.count(Genome.id))
+            .filter(Genome.accession_type == "ncbi_assembly")
+            .filter(Genome.accession_value == assembly_id)
+        )
+        > 0
+    ):
         raise AlreadyLoadedError(f"Assembly {assembly_id} already loaded")
 
     logging.debug(f"Adding new genome: {assembly_id}")
     genome_db = Genome(accession_type="ncbi_assembly", accession_value=assembly_id)
     session.add(genome_db)
-    session.commit()
+    # session.commit()
 
     if assembly_path is None:
         logging.warning(f"No assembly file found for {assembly_id}")
@@ -208,6 +209,7 @@ def load_assembly(assembly_id, assembly_path, chromosome_accessions, session):
                 continue
             logging.info(f"Loading chromosome [{i+1} of ?] {record.id}")
             load_chromosome(record, genome_db, session)
+    session.commit()
 
 
 def first_uppercase(val):
@@ -218,17 +220,18 @@ def first_uppercase(val):
 
 @timing
 def load_chromosome(record, genome_db, session):
-    chromosome = (
-        session.query(Chromosome)
-        .filter(Chromosome.ncbi_accession == record.id)
-        .filter(Chromosome.genome_id == genome_db.id)
-        .first()
-    )
-    if not chromosome:
+    chromosome_db = None
+    if genome_db.id is not None:
+        chromosome_db = session.scalars(
+            select(Chromosome)
+            .filter(Chromosome.ncbi_accession == record.id)
+            .filter(Chromosome.genome_id == genome_db.id)
+            .limit(1)
+        ).first()
+    if not chromosome_db:
         logging.debug("Loading new chromosome: {}".format(record.id))
-        chromosome = Chromosome(ncbi_accession=record.id, genome_id=genome_db.id)
-        session.add(chromosome)
-        session.commit()
+        chromosome_db = Chromosome(ncbi_accession=record.id)
+        genome_db.chromosomes.append(chromosome_db)
     else:
         logging.debug("Chromosome already loaded: %s" % record.id)
 
@@ -236,12 +239,12 @@ def load_chromosome(record, genome_db, session):
     if genome_db.organism is None:
         logging.warning(f"Organism: {record.annotations['organism']}")
         genome_db.organism = record.annotations["organism"]
-        session.commit()
 
     bigg_id_warnings = 0
     duplicate_genes_warnings = 0
     warning_num = 5
     synonym_collection = {}
+    added_gene_bigg_ids = {}
     for i, feature in enumerate(record.features):
         # update genome with the source information
         if genome_db.taxon_id is None and feature.type == "source":
@@ -292,17 +295,21 @@ def load_chromosome(record, genome_db, session):
             logging.warning(
                 (
                     "No locus_tag or gene name for gene %d in chromosome "
-                    "%s" % (i, chromosome.ncbi_accession)
+                    "%s" % (i, chromosome_db.ncbi_accession)
                 )
             )
             continue
 
-        gene_db = (
-            session.query(Gene)
-            .filter(Gene.bigg_id == bigg_id)
-            .filter(Gene.chromosome_id == chromosome.id)
-            .first()
-        )
+        gene_db = None
+        if bigg_id in added_gene_bigg_ids:
+            gene_db = added_gene_bigg_ids[bigg_id]
+        elif chromosome_db.id is not None:
+            gene_db = session.scalars(
+                select(Gene)
+                .filter(Gene.bigg_id == bigg_id)
+                .filter(Gene.chromosome_id == chromosome_db.id)
+                .limit(1)
+            ).first()
 
         if gene_db is None:
             # get the strand and positions
@@ -323,7 +330,6 @@ def load_chromosome(record, genome_db, session):
             gene_db = Gene(
                 bigg_id=bigg_id,
                 locus_tag=locus_tag,
-                chromosome_id=chromosome.id,
                 name=gene_name,
                 leftpos=leftpos,
                 rightpos=rightpos,
@@ -332,8 +338,8 @@ def load_chromosome(record, genome_db, session):
                 protein_sequence=protein_sequence,
                 mapped_to_genbank=True,
             )
-            session.add(gene_db)
-            session.commit()
+            chromosome_db.genome_regions.append(gene_db)
+            added_gene_bigg_ids[bigg_id] = gene_db
 
         else:
             # warn about duplicate genes.
@@ -342,7 +348,10 @@ def load_chromosome(record, genome_db, session):
             # leftpos and rightpos correspond to a CDS, not the whole gene. So
             # these need to be fixed eventually.
             if duplicate_genes_warnings <= warning_num:
-                msg = "Duplicate genes %s on chromosome %s" % (bigg_id, chromosome.id)
+                msg = "Duplicate genes %s on chromosome %s" % (
+                    bigg_id,
+                    chromosome_db.ncbi_accession,
+                )
                 if duplicate_genes_warnings == warning_num:
                     msg += " (Warnings limited to %d)" % warning_num
                 logging.warning(msg)
@@ -385,5 +394,6 @@ def load_chromosome(record, genome_db, session):
                     collect_gene_synonym(
                         synonym_collection, gene_db, sp[1], "refseq_orf_id"
                     )
-
+    session.commit()
     insert_synonyms(session, synonym_collection)
+    session.commit()
