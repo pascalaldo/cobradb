@@ -119,14 +119,19 @@ def get_or_create_data_source(session, bigg_id):
         bigg_id, name, url_prefix = _find_data_source_url(bigg_id, url_prefs)
         # data source may already exist if this is a synonym
         data_source_db, exists = get_or_create(
-            session, DataSource, bigg_id=bigg_id, name=name, url_prefix=url_prefix
+            session,
+            DataSource,
+            bigg_id=bigg_id,
+            name=name,
+            url_prefix=url_prefix,
+            do_commit=False,
         )
         if not exists:
             if name is None:
                 logging.warning("No name found for data source %s" % bigg_id)
             if url_prefix is None:
                 logging.warning("No URL found for data source %s" % bigg_id)
-    return data_source_db.id
+    return data_source_db
 
 
 def increment_id(id, increment_name=""):

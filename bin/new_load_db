@@ -2,14 +2,18 @@
 
 # Configure the logger before imports so other packages do not override this
 # setup.
+import os
+
+os.environ["LIBCHEBIPY_DOWNLOAD_DIR"] = "/chebi"
 import logging
 import time
 from pathlib import Path
-from pprint import pprint
+import cProfile
+
+from sqlalchemy.orm import close_all_sessions
 
 from cobradb.compartments import load_compartments
 from cobradb.component_loading import load_assembly
-from cobradb.metabolites import create_metabolite
 
 from cobradb.curated_reactions import load_reactions
 from cobradb.models import *
@@ -102,12 +106,7 @@ def main():
         drop_all_tables(engine, custom_enums.keys())
         timings["drop_all"] = time.time() - f_start_time
 
-    f_start_time = time.time()
-    logging.info("Building the database models")
-    Base.metadata.create_all(bind=engine)
-    timings["create_all"] = time.time() - f_start_time
-
-    if args.drop_models:
+    if args.drop_models and not args.drop_all:
         f_start_time = time.time()
         from sqlalchemy.sql.expression import text
 
@@ -115,10 +114,15 @@ def main():
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "TRUNCATE model, reaction, component, compartment, deprecated_id CASCADE;"
+                    "DROP TABLE IF EXISTS model, model_reaction, model_compartmentalized_component, model_gene, memote_result, model_count, publication_model CASCADE;"
                 )
             )
         timings["drop_models"] = time.time() - f_start_time
+
+    f_start_time = time.time()
+    logging.info("Building the database models")
+    Base.metadata.create_all(bind=engine)
+    timings["create_all"] = time.time() - f_start_time
 
     # make the session
     session = Session()
@@ -219,13 +223,13 @@ def main():
                 logging.info(str(e))
             except Exception as e:
                 logging.exception(e)
+        session.commit()
         timings["load_assemblies"] = time.time() - f_start_time
 
     if not args.skip_rhea:
         load_rhea(settings.rhea, session)
     if not args.skip_curated_metabolites:
         load_bigg_ids(settings.curated_metabolites, session)
-    pprint(create_metabolite("amet", "CHEBI:15414", session))
     if not args.skip_curated_reactions:
         load_reactions(settings.curated_reactions, session)
     if not args.skip_models:
@@ -247,7 +251,7 @@ def main():
             model_bigg_id = None
             already_loaded = False
             try:
-                model_bigg_id = load_model(
+                model_bigg_id, model_db_id = load_model(
                     model_dir / model_dict["model_filename"],
                     model_dict["pub_ref"],
                     model_dict["genome_ref"],
@@ -255,7 +259,7 @@ def main():
                 )
             except AlreadyLoadedError as e:
                 logging.info(str(e))
-                model_bigg_id = e.bigg_id
+                model_bigg_id, model_db_id = e.bigg_id, e.db_id
                 already_loaded = True
             except Exception as e:
                 print(
@@ -298,6 +302,7 @@ def main():
 
     if not args.skip_compartments:
         load_compartments(settings.compartment_names, session)
+        session.commit()
     timings["total"] = time.time() - start_time
     logging.debug(str(timings))
     session.close()
@@ -306,4 +311,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # cProfile.run("main()")
+    # cProfile.run("main()", sort="cumtime")

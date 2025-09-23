@@ -19,9 +19,11 @@ def load_compartments(compartment_names_file, session):
         compartment_names = {}
 
     for k, v in compartment_names.items():
-        compartment_db = session.query(Compartment).filter(Compartment.id == k).first()
+        compartment_db = (
+            session.query(Compartment).filter(Compartment.bigg_id == k).first()
+        )
         if compartment_db is None:
-            compartment_db = Compartment(id=k, name=v)
+            compartment_db = Compartment(bigg_id=k, name=v)
             session.add(compartment_db)
         else:
             compartment_db.name = v
