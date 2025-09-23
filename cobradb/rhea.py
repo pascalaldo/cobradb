@@ -39,7 +39,6 @@ def create_hierarchical_conversion_reaction(lhs_chebi, rhs_chebi, session):
         name=f"Conversion of {lhs_chebi.get_id()} to {rhs_chebi.get_id()}, because one is an instance of the other.",
         equation=f"{lhs_chebi.get_name()} = {rhs_chebi.get_name()}",
     )
-    session.add(reference_reaction_db)
     lhs_compound = session.scalars(
         select(ReferenceCompound)
         .filter(ReferenceCompound.bigg_id == lhs_chebi.get_id())
@@ -64,6 +63,8 @@ def create_hierarchical_conversion_reaction(lhs_chebi, rhs_chebi, session):
         compartment="0",
     )
     reference_reaction_db.reaction_participants.append(rhs_part)
+    reference_reaction_db.update_hash()
+    session.add(reference_reaction_db)
 
 
 CHEBI_PROTONATION_RELATIONS = ["is_conjugate_acid_of", "is_conjugate_base_of"]
@@ -84,14 +85,15 @@ def add_reference_exchange_reactions(compound_db, session):
         name=f"Exchange of {compound_name}.",
         equation=f"{compound_name} = ∅",
     )
-    session.add(reference_reaction_db)
     lhs_part = ReferenceReactionParticipant(
-        compound_id=compound_db.id,
+        compound=compound_db,
         side="L",
         coefficient="1",
         compartment="0",
     )
     reference_reaction_db.reaction_participants.append(lhs_part)
+    reference_reaction_db.update_hash()
+    session.add(reference_reaction_db)
     session.commit()
 
 
@@ -137,7 +139,6 @@ def add_reference_conversion_reactions(compound_db, session):
                 name=f"Protonation of {lhs_chebi.get_id()} to {rhs_chebi.get_id()}.",
                 equation=f"{lhs_chebi.get_name()} + {n_h_plus} H+ = {rhs_chebi.get_name()}",
             )
-            session.add(reference_reaction_db)
             lhs_compound = session.scalars(
                 select(ReferenceCompound)
                 .filter(ReferenceCompound.bigg_id == lhs_chebi.get_id())
@@ -174,6 +175,8 @@ def add_reference_conversion_reactions(compound_db, session):
                 compartment="0",
             )
             reference_reaction_db.reaction_participants.append(proton_part)
+            reference_reaction_db.update_hash()
+            session.add(reference_reaction_db)
             session.commit()
         elif rel._Relation__typ == "is_a":
             rel_chebi = f"CHEBI:{rel._Relation__target_chebi_id}"
@@ -301,7 +304,6 @@ def push_rhea_reference(rhea_db, session):
             bigg_id=rx_id,
             equation=reaction["equation"],
         )
-        session.add(reaction_db)
         for side_n, coefficient, compound_id, compartment in reaction["participants"]:
             compound_db = session.scalars(
                 select(ReferenceCompound)
@@ -315,6 +317,10 @@ def push_rhea_reference(rhea_db, session):
                 compartment=compartment,
             )
             reaction_db.reaction_participants.append(participant_db)
+        if len(reaction_db.reaction_participants) > 0:
+            reaction_db.update_hash()
+            session.add(reaction_db)
+
     session.commit()
     session.close()
 

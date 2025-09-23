@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import Bundle, aliased
 from cobradb.models import *
 from cobradb.util import timing
 
@@ -209,60 +209,70 @@ def find_reference_reaction(proposed_ids, parsed_participants, session):
 
     if reference_db is None:
         db_entries = None
-        stmt = session.query(ReferenceReaction)
 
-        for parsed_participant in parsed_participants:
-            rrp_alias = aliased(ReferenceReactionParticipant)
-            crm_alias = aliased(ComponentReferenceMapping)
-            uc_alias = aliased(UniversalComponent)
-            stmt = (
-                stmt.join(
-                    rrp_alias,
-                    rrp_alias.reaction_id == ReferenceReaction.id,
-                )
-                .join(
-                    crm_alias,
-                    crm_alias.reference_compound_id == rrp_alias.compound_id,
-                )
-                .join(uc_alias, uc_alias.id == crm_alias.universal_component_id)
-                .filter(uc_alias.bigg_id == parsed_participant[2])
+        p_ucs = [p[2] for p in parsed_participants]
+        db_rows = session.execute(
+            select(
+                ReferenceCompound.bigg_id,
+                UniversalComponent.bigg_id,
             )
-        rrp_count_alias = aliased(ReferenceReactionParticipant)
-        subq = (
-            session.query(
-                rrp_count_alias.reaction_id,
-                func.count(rrp_count_alias.id).label("count"),
+            .join(
+                ComponentReferenceMapping,
+                ComponentReferenceMapping.reference_compound_id == ReferenceCompound.id,
             )
-            .group_by(rrp_count_alias.reaction_id)
-            .subquery()
-        )
-        stmt = stmt.join(subq, subq.c.reaction_id == ReferenceReaction.id).filter(
-            subq.c.count == len(parsed_participants)
-        )
+            .join(ComponentReferenceMapping.universal_component)
+            .filter(UniversalComponent.bigg_id.in_(p_ucs))
+        ).all()
+        db_rows_mapping = {k: v for v, k in db_rows}
+        if any(x not in db_rows_mapping for x in p_ucs):
+            return None, None
 
-        db_entries = set(stmt.all())
+        p_info = [
+            dict(
+                reference_compound_bigg_id=db_rows_mapping[p[2]], coefficient=abs(p[0])
+            )
+            for p in parsed_participants
+        ]
+        hash_pattern = ReferenceReaction.generate_hash(p_info, pattern=True)
 
+        db_entries = session.scalars(
+            select(ReferenceReaction).where(
+                ReferenceReaction.hash.regexp_match(hash_pattern)
+            )
+        ).all()
+        # stmt = session.query(ReferenceReaction)
+        #
         # for parsed_participant in parsed_participants:
-        #     new_db_entries = (
-        #         session.query(ReferenceReaction)
-        #         .join(
-        #             ReferenceReactionParticipant,
-        #             ReferenceReactionParticipant.reaction_id == ReferenceReaction.id,
+        #     rrp_alias = aliased(ReferenceReactionParticipant)
+        #     crm_alias = aliased(ComponentReferenceMapping)
+        #     uc_alias = aliased(UniversalComponent)
+        #     stmt = (
+        #         stmt.join(
+        #             rrp_alias,
+        #             rrp_alias.reaction_id == ReferenceReaction.id,
         #         )
         #         .join(
-        #             ComponentReferenceMapping,
-        #             ComponentReferenceMapping.reference_id
-        #             == ReferenceReactionParticipant.compound_id,
+        #             crm_alias,
+        #             crm_alias.reference_compound_id == rrp_alias.compound_id,
         #         )
-        #         .filter(ComponentReferenceMapping.universal_id == parsed_participant[2])
-        #         .distinct()
+        #         .join(uc_alias, uc_alias.id == crm_alias.universal_component_id)
+        #         .filter(uc_alias.bigg_id == parsed_participant[2])
         #     )
-        #     if db_entries is None:
-        #         db_entries = set(new_db_entries)
-        #     else:
-        #         db_entries &= set(new_db_entries)
-        #     if not db_entries:
-        #         break
+        # rrp_count_alias = aliased(ReferenceReactionParticipant)
+        # subq = (
+        #     session.query(
+        #         rrp_count_alias.reaction_id,
+        #         func.count(rrp_count_alias.id).label("count"),
+        #     )
+        #     .group_by(rrp_count_alias.reaction_id)
+        #     .subquery()
+        # )
+        # stmt = stmt.join(subq, subq.c.reaction_id == ReferenceReaction.id).filter(
+        #     subq.c.count == len(parsed_participants)
+        # )
+        #
+        # db_entries = set(stmt.all())
+
         if not db_entries:
             return None, None
         db_entries = list(db_entries)
@@ -471,7 +481,7 @@ def push_reactions(data, session):
                         select(Component)
                         .join(Component.universal_component)
                         .filter(
-                            (Component.universal_component.bigg_id == universal_id)
+                            (UniversalComponent.bigg_id == universal_id)
                             & (Component.charge == charge)
                         )
                         .limit(1)

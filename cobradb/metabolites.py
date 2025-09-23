@@ -7,6 +7,7 @@ from cobradb.models import (
     ComponentIDMapping,
     ComponentReferenceMapping,
     InChI,
+    Model,
     ReferenceCompound,
     UniversalComponent,
     UniversalComponentReferenceMapping,
@@ -313,11 +314,14 @@ def create_metabolite(
     return {"status": "success", "components_added": successfully_added}
 
 
-def create_model_specific_metabolite(bigg_id, model_id, charge, name, formula, session):
+def create_model_specific_metabolite(
+    bigg_id, model_db_id, charge, name, formula, session
+):
     if charge is None:
         charge = 0
-    new_universal_id = f"__{model_id}__{bigg_id}"
-    new_bigg_id = f"__{model_id}__{bigg_id}:{charge}"
+    model_db = session.get(Model, model_db_id)
+    new_universal_id = f"__{model_db.bigg_id}__{bigg_id}"
+    new_bigg_id = f"__{model_db.bigg_id}__{bigg_id}:{charge}"
 
     universal_metabolite_db = session.scalars(
         select(UniversalComponent)
@@ -326,7 +330,7 @@ def create_model_specific_metabolite(bigg_id, model_id, charge, name, formula, s
     ).first()
     if not universal_metabolite_db:
         universal_metabolite_db = UniversalComponent(
-            bigg_id=new_universal_id, name=name, model_specific=True
+            bigg_id=new_universal_id, name=name, model=model_db
         )
         session.add(universal_metabolite_db)
 
@@ -340,7 +344,7 @@ def create_model_specific_metabolite(bigg_id, model_id, charge, name, formula, s
             name=name,
             formula=formula,
             charge=charge,
-            model_specific=True,
+            model=model_db,
         )
         session.add(metabolite_db)
     return universal_metabolite_db, metabolite_db

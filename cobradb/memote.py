@@ -2,6 +2,7 @@ from collections.abc import Mapping
 import gzip
 import json
 import cobra
+from sqlalchemy import select
 import memote.suite.api as api
 from memote.suite.results import ResultManager
 
@@ -10,9 +11,12 @@ from cobradb.models import (
     CompartmentalizedComponent,
     MemoteResult,
     MemoteTest,
+    Model,
     ModelCompartmentalizedComponent,
     ModelReaction,
     Reaction,
+    UniversalCompartmentalizedComponent,
+    UniversalReaction,
 )
 
 TEST_TYPES = {
@@ -170,11 +174,13 @@ def load_memote_results(model_bigg_id, filename, session):
     with gzip.open(filename, "rb") as f:
         results = json.load(f)
 
-    existing_result_db = (
-        session.query(MemoteResult)
-        .filter(MemoteResult.model_id == model_bigg_id)
-        .first()
-    )
+    model_db = session.scalars(
+        select(Model).filter(Model.bigg_id == model_bigg_id).limit(1)
+    ).first()
+
+    existing_result_db = session.scalars(
+        select(MemoteResult).filter(MemoteResult.model == model_db).limit(1)
+    ).first()
     if existing_result_db is not None:
         raise AlreadyLoadedError(
             f"There are already Memote results for {model_bigg_id} in the database",
@@ -182,8 +188,8 @@ def load_memote_results(model_bigg_id, filename, session):
         )
 
     for test_func, test_result in results["tests"].items():
-        test_id = test_func
-        test_type = TEST_TYPES.get(test_id)
+        test_bigg_id = test_func
+        test_type = TEST_TYPES.get(test_bigg_id)
         if test_type is None:
             continue
 
@@ -196,10 +202,12 @@ def load_memote_results(model_bigg_id, filename, session):
             invert_result = test_type.get("invert_result", invert_result)
             test_type = test_type["type"]
 
-        test_db = session.query(MemoteTest).filter(MemoteTest.id == test_id).first()
+        test_db = session.scalars(
+            select(MemoteTest).filter(MemoteTest.bigg_id == test_bigg_id).limit(1)
+        ).first()
         if test_db is None:
             test_db = MemoteTest(
-                id=test_id,
+                bigg_id=test_bigg_id,
                 name=test_result["title"],
                 summary=test_result.get("summary"),
                 format_type=test_result["format_type"],
@@ -211,7 +219,7 @@ def load_memote_results(model_bigg_id, filename, session):
             session.commit()
 
         general_result = {
-            "model_id": model_bigg_id,
+            "model_id": model_db.id,
             "test_id": test_db.id,
         }
         specific_results = {}
@@ -232,7 +240,7 @@ def load_memote_results(model_bigg_id, filename, session):
                 for k in prop_val:
                     if k not in specific_results:
                         specific_results[k] = {
-                            "model_id": model_bigg_id,
+                            "model_id": model_db.id,
                             "test_id": test_db.id,
                         }
                     if test_type in ["per_reaction", "count_reaction"]:
@@ -243,16 +251,17 @@ def load_memote_results(model_bigg_id, filename, session):
                                 universal_reaction_id.rsplit(":", maxsplit=1)
                             )
                             copy_number = int(copy_number)
-                        model_reaction_db = (
-                            session.query(ModelReaction)
-                            .join(Reaction, Reaction.id == ModelReaction.reaction_id)
+                        model_reaction_db = session.scalars(
+                            select(ModelReaction)
+                            .join(ModelReaction.reaction)
+                            .join(Reaction.universal_reaction)
                             .filter(
-                                (Reaction.universal_id == universal_reaction_id)
+                                (UniversalReaction.bigg_id == universal_reaction_id)
                                 & (ModelReaction.copy_number == copy_number)
-                                & (ModelReaction.model_id == model_bigg_id)
+                                & (ModelReaction.model_id == model_db.id)
                             )
-                            .first()
-                        )
+                            .limit(1)
+                        ).first()
                         if model_reaction_db is None:
                             print(f"Reaction not found: {k}")
                             continue
@@ -260,47 +269,49 @@ def load_memote_results(model_bigg_id, filename, session):
                     elif test_type in ["per_metabolite", "count_metabolite"]:
                         metabolite_id = k
                         if ":" in metabolite_id:
-                            model_comp_comp_db = (
-                                session.query(ModelCompartmentalizedComponent)
+                            model_comp_comp_db = session.scalars(
+                                select(ModelCompartmentalizedComponent)
                                 .join(
-                                    CompartmentalizedComponent,
-                                    CompartmentalizedComponent.id
-                                    == ModelCompartmentalizedComponent.compartmentalized_component_id,
-                                )
-                                .filter(
-                                    (CompartmentalizedComponent.id == metabolite_id)
-                                    & (
-                                        ModelCompartmentalizedComponent.model_id
-                                        == model_bigg_id
-                                    )
-                                )
-                                .first()
-                            )
-                        else:
-                            model_comp_comp_db = (
-                                session.query(ModelCompartmentalizedComponent)
-                                .join(
-                                    CompartmentalizedComponent,
-                                    CompartmentalizedComponent.id
-                                    == ModelCompartmentalizedComponent.compartmentalized_component_id,
+                                    ModelCompartmentalizedComponent.compartmentalized_component
                                 )
                                 .filter(
                                     (
-                                        CompartmentalizedComponent.universal_id
+                                        CompartmentalizedComponent.bigg_id
                                         == metabolite_id
                                     )
                                     & (
                                         ModelCompartmentalizedComponent.model_id
-                                        == model_bigg_id
+                                        == model_db.id
                                     )
                                 )
-                                .first()
-                            )
+                                .limit(1)
+                            ).first()
+                        else:
+                            model_comp_comp_db = session.scalars(
+                                select(ModelCompartmentalizedComponent)
+                                .join(
+                                    ModelCompartmentalizedComponent.compartmentalized_component
+                                )
+                                .join(
+                                    CompartmentalizedComponent.universal_compartmentalized_component
+                                )
+                                .filter(
+                                    (
+                                        UniversalCompartmentalizedComponent.bigg_id
+                                        == metabolite_id
+                                    )
+                                    & (
+                                        ModelCompartmentalizedComponent.model_id
+                                        == model_db.id
+                                    )
+                                )
+                                .limit(1)
+                            ).first()
                         if model_comp_comp_db is None:
                             print(f"Metabolite not found: {k}")
                             continue
                         specific_results[k][
-                            "model_component_id"
+                            "model_compartmentalized_component_id"
                         ] = model_comp_comp_db.id
                     else:
                         print(f"Type of test currently not implemented: {test_type}")

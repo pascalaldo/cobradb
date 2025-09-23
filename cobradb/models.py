@@ -3,6 +3,7 @@
 """Module to implement ORM to the ome database"""
 
 import datetime
+import math
 from operator import itemgetter
 from typing import List, Optional
 
@@ -88,9 +89,10 @@ class NotFoundError(Exception):
 
 
 class AlreadyLoadedError(Exception):
-    def __init__(self, message, bigg_id=None):
+    def __init__(self, message, bigg_id=None, db_id=None):
         super().__init__(message)
         self.bigg_id = bigg_id
+        self.db_id = db_id
 
 
 # --------
@@ -219,8 +221,10 @@ class GenomeRegion(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    chromosome_id: Mapped[int] = mapped_column(ForeignKey("chromosome.id"))
-    chromosome: Mapped["Chromosome"] = relationship(back_populates="genome_regions")
+    chromosome_id: Mapped[Optional[int]] = mapped_column(ForeignKey("chromosome.id"))
+    chromosome: Mapped[Optional["Chromosome"]] = relationship(
+        back_populates="genome_regions"
+    )
 
     bigg_id: Mapped[str]
     leftpos: Mapped[Optional[int]]
@@ -284,13 +288,18 @@ class UniversalComponent(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
     name: Mapped[Optional[str]]
-    model_specific: Mapped[bool] = mapped_column(Boolean, default=False)
     components: Mapped[List["Component"]] = relationship(
         back_populates="universal_component"
     )
     reference_mapping: Mapped["UniversalComponentReferenceMapping"] = relationship(
         back_populates="universal_component"
     )
+
+    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey("model.id"))
+    model: Mapped[Optional["Model"]] = relationship(
+        back_populates="model_namespace_universal_components"
+    )
+
     universal_compartmentalized_components: Mapped[
         List["UniversalCompartmentalizedComponent"]
     ] = relationship(back_populates="universal_component")
@@ -555,6 +564,9 @@ class Model(Base):
 
     model_namespace_components: Mapped[List[Component]] = relationship(
         back_populates="model"
+    )
+    model_namespace_universal_components: Mapped[List[UniversalComponent]] = (
+        relationship(back_populates="model")
     )
     model_namespace_reactions: Mapped[List["Reaction"]] = relationship(
         back_populates="model"
@@ -947,6 +959,8 @@ class ReferenceReaction(Base):
     name: Mapped[Optional[str]]
     equation: Mapped[Optional[str]]
 
+    hash: Mapped[str]
+
     reaction_participants: Mapped[List["ReferenceReactionParticipant"]] = relationship(
         back_populates="reaction"
     )
@@ -956,6 +970,50 @@ class ReferenceReaction(Base):
     )
 
     __table_args__ = (UniqueConstraint("bigg_id"),)
+
+    @staticmethod
+    def generate_hash(participants, pattern=False):
+        part_dict = {}
+        for p in participants:
+            if isinstance(p, dict):
+                rc = p.get("reference_compound")
+                if rc is None:
+                    rc_id = p["reference_compound_bigg_id"]
+                else:
+                    rc_id = rc.bigg_id
+                coefficient = str(p["coefficient"]).lower()
+            else:
+                rc_id = p.compound.bigg_id
+                coefficient = p.coefficient
+            if "n" in coefficient:
+                coefficient = math.inf
+            else:
+                try:
+                    coefficient = abs(float(coefficient))
+                except:
+                    coefficient = math.inf
+            part_dict[rc_id] = part_dict.get(rc_id, 0) + coefficient
+        if pattern:
+            hash_str = "/".join(
+                f"(({Reaction.coefficient_to_string(coeff)})|N)\\${p_id}"
+                for p_id, coeff in sorted(
+                    part_dict.items(),
+                    key=itemgetter(0),
+                )
+            )
+            hash_str = f"^{hash_str}$"
+        else:
+            hash_str = "/".join(
+                f"{Reaction.coefficient_to_string(coeff)}${p_id}"
+                for p_id, coeff in sorted(
+                    part_dict.items(),
+                    key=itemgetter(0),
+                )
+            )
+        return hash_str
+
+    def update_hash(self):
+        self.hash = ReferenceReaction.generate_hash(self.reaction_participants)
 
     def __repr__(self):
         return (
@@ -1121,7 +1179,9 @@ class Reaction(Base):
         if isinstance(coefficient, int):
             return str(coefficient)
         if isinstance(coefficient, float):
-            if coefficient.is_integer():
+            if math.isinf(coefficient):
+                return "N"
+            elif coefficient.is_integer():
                 return str(int(coefficient))
             else:
                 return str(coefficient)
