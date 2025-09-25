@@ -2,13 +2,20 @@ from typing import Tuple, Dict, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Bundle
+from cobradb.data_sources import DATA_SOURCE_NAMES
 from cobradb.models import (
+    Annotation,
+    AnnotationLink,
+    AnnotationProperty,
     Component,
+    ComponentAnnotationMapping,
     ComponentIDMapping,
     ComponentReferenceMapping,
+    DataSource,
     InChI,
     Model,
     ReferenceCompound,
+    ReferenceCompoundAnnotationMapping,
     UniversalComponent,
     UniversalComponentReferenceMapping,
 )
@@ -165,7 +172,110 @@ def get_or_create_small_molecule_reference(
 
     chebi_db = cpd_cls(**cpd_dict)
     session.add(chebi_db)
+
+    if cpd_cls is ReferenceCompound:
+        add_chebi_annotations(chebi_db, chebi_entity, session)
+
     return False, chebi_db
+
+
+CHEBI_METABOLITE_PROPERTIES = {
+    ("CHEBI", "CHEBI"): "CHEBI",
+    ("KEGG COMPOUND accession", "KEGG COMPOUND"): "kegg.compound",
+    ("DrugBank accession", "DrugBank"): "drugbank",
+    ("KEGG DRUG accession", "KEGG DRUG"): "kegg.drug",
+    ("Wikipedia accession", "Wikipedia"): "wikipedia.en",
+    ("MetaCyc accession", "MetaCyc"): "metacyc.compound",
+    ("HMDB accession", "HMDB"): "hmdb",
+}
+
+
+def add_chebi_annotations(reference_compound_db, chebi_entity, session):
+    data_source_dbs = {}
+    for (
+        data_source_type,
+        data_source_source,
+    ), data_source_bigg_id in CHEBI_METABOLITE_PROPERTIES:
+        data_source_db = session.scalars(
+            select(DataSource)
+            .filter(DataSource.bigg_id == data_source_bigg_id)
+            .limit(1)
+        ).first()
+        if data_source_db is None:
+            data_source_db = DataSource(
+                bigg_id=data_source_bigg_id,
+                name=DATA_SOURCE_NAMES[data_source_bigg_id],
+                url_prefix=f"https://identifiers.org/",
+            )
+            session.add(data_source_db)
+        data_source_dbs[data_source_bigg_id] = data_source_db
+
+    chebi = reference_compound_db.bigg_id
+    annotation_db = session.scalars(
+        select(Annotation).filter(Annotation.bigg_id == chebi).limit(1)
+    ).firt()
+    if not annotation_db:
+        annotation_db = Annotation(
+            bigg_id=chebi,
+            type="chebi",
+            default_data_source=data_source_dbs["CHEBI"],
+        )
+        session.add(annotation_db)
+
+    for property, func in {
+        "definition": chebi_entity.get_definition,
+        "star": chebi_entity.get_star,
+        "mass": chebi_entity.get_mass,
+        "smiles": chebi_entity.get_smiles,
+    }.items():
+        prop_val = func()
+        if isinstance(prop_val, str):
+            prop_val = prop_val.strip()
+            if len(prop_val) == 0:
+                prop_val = None
+        if prop_val is None:
+            continue
+        if isinstance(prop_val, int) and property.startswith("is_"):
+            prop_val = bool(prop_val)
+        prop_db = AnnotationProperty(key=property)
+        prop_db.value = prop_val
+        annotation_db.properties.append(prop_db)
+
+    for name in chebi_entity.get_names():
+        prop_db = AnnotationProperty(key="name")
+        prop_db.value = name.get_name()
+        annotation_db.properties.append(prop_db)
+
+    alias_db = AnnotationLink(
+        identifier=chebi,
+        data_source=data_source_dbs["CHEBI"],
+    )
+    annotation_db.links.append(alias_db)
+
+    for database_accession in chebi_entity.get_database_accessions():
+        data_source_bigg_id = CHEBI_METABOLITE_PROPERTIES.get(
+            (database_accession.get_type(), database_accession.get_source())
+        )
+        prop_val = database_accession.get_accession_number()
+        if isinstance(prop_val, str):
+            prop_val = prop_val.strip()
+            if len(prop_val) == 0:
+                prop_val = None
+        if prop_val is None:
+            continue
+        if isinstance(prop_val, str):
+            prop_val = {prop_val}
+
+        for val in prop_val:
+            alias_db = AnnotationLink(
+                identifier=val, data_source=data_source_dbs[data_source_bigg_id]
+            )
+            annotation_db.links.append(alias_db)
+
+    annotation_mapping = ReferenceCompoundAnnotationMapping(
+        reference_comound=reference_compound_db,
+    )
+    annotation_db.reference_compound_mappings.append(annotation_mapping)
 
 
 BIGG_ID_PATTERN = re.compile(f"[a-zA-Z0-9][a-zA-Z0-9_]*")

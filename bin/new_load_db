@@ -3,6 +3,9 @@
 # Configure the logger before imports so other packages do not override this
 # setup.
 import os
+import shutil
+
+from cobradb.seed import push_model_seed_metabolites
 
 os.environ["LIBCHEBIPY_DOWNLOAD_DIR"] = "/chebi"
 import logging
@@ -17,7 +20,7 @@ from cobradb.component_loading import load_assembly
 
 from cobradb.curated_reactions import load_reactions
 from cobradb.models import *
-from cobradb import settings, util
+from cobradb import seed, settings, util
 from cobradb.rhea import load_rhea
 from cobradb.curated_metabolites import load_bigg_ids
 from cobradb.model_loading import load_model
@@ -61,6 +64,11 @@ parser.add_argument(
     help="Skip loading compartment names",
     action="store_true",
 )
+parser.add_argument(
+    "--skip-seed-metabolites",
+    help="Skip loading SEED metabolite annotations",
+    action="store_true",
+)
 args = parser.parse_args()
 
 
@@ -99,6 +107,17 @@ def drop_all_tables(engine, enums_to_drop=None):
 def main():
     start_time = time.time()
     timings = {}
+
+    # Workaround because setting the environment variable does not seem to change anything.
+    chebi_cache_path = Path("~/libChEBI")
+    chebi_new_cache_path = Path("/chebi/libChEBI")
+    chebi_new_cache_path.mkdir(parents=True, exist_ok=True)
+    if chebi_cache_path.exists():
+        if not chebi_cache_path.is_symlink():
+            shutil.rmtree(chebi_cache_path)
+            chebi_cache_path.symlink_to(os.environ["LIBCHEBIPY_DOWNLOAD_DIR"])
+    else:
+        chebi_cache_path.symlink_to(os.environ["LIBCHEBIPY_DOWNLOAD_DIR"])
 
     if args.drop_all:
         f_start_time = time.time()
@@ -302,6 +321,13 @@ def main():
 
     if not args.skip_compartments:
         load_compartments(settings.compartment_names, session)
+        session.commit()
+
+    if not args.skip_seed_metabolites:
+        modelseed_dir = "/chebi"
+        # seed.download_or_update(modelseed_dir)
+        modelseed_db = seed.load_modelseed_database(modelseed_dir)
+        push_model_seed_metabolites(modelseed_db, session)
         session.commit()
     timings["total"] = time.time() - start_time
     logging.debug(str(timings))
