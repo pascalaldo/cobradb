@@ -5,6 +5,8 @@
 import os
 import shutil
 
+from libchebipy import ChebiEntity
+
 from cobradb.seed import push_model_seed_metabolites
 
 os.environ["LIBCHEBIPY_DOWNLOAD_DIR"] = "/chebi"
@@ -109,15 +111,35 @@ def main():
     timings = {}
 
     # Workaround because setting the environment variable does not seem to change anything.
-    chebi_cache_path = Path("~/libChEBI")
+    chebi_cache_path = Path("/libChEBI")
     chebi_new_cache_path = Path("/chebi/libChEBI")
     chebi_new_cache_path.mkdir(parents=True, exist_ok=True)
     if chebi_cache_path.exists():
         if not chebi_cache_path.is_symlink():
             shutil.rmtree(chebi_cache_path)
-            chebi_cache_path.symlink_to(os.environ["LIBCHEBIPY_DOWNLOAD_DIR"])
+            chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
     else:
-        chebi_cache_path.symlink_to(os.environ["LIBCHEBIPY_DOWNLOAD_DIR"])
+        chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
+
+    # Make sure all cache files are downloaded
+    for i in range(10):
+        failed = False
+        try:
+            # Load a random chebi entity and access all relevant information.
+            # Will download all appropriate files for all compounds.
+            c = ChebiEntity("CHEBI:27732")
+            c.get_id()
+            c.get_charge()
+            c.get_names()
+            c.get_incomings()
+            c.get_inchi()
+            c.get_database_accessions()
+            c.get_smiles()
+        except:
+            failed = True
+        if not failed:
+            break
+        time.sleep(2)  # wait 2 seconds and try again
 
     if args.drop_all:
         f_start_time = time.time()
@@ -221,6 +243,13 @@ def main():
             }
         )
 
+    if not args.skip_rhea:
+        load_rhea(settings.rhea, session)
+    if not args.skip_curated_metabolites:
+        load_bigg_ids(settings.curated_metabolites, session)
+    if not args.skip_curated_reactions:
+        load_reactions(settings.curated_reactions, session)
+
     # load the genome
     genomes_for_models = {}
     if not args.skip_genomes:
@@ -245,12 +274,6 @@ def main():
         session.commit()
         timings["load_assemblies"] = time.time() - f_start_time
 
-    if not args.skip_rhea:
-        load_rhea(settings.rhea, session)
-    if not args.skip_curated_metabolites:
-        load_bigg_ids(settings.curated_metabolites, session)
-    if not args.skip_curated_reactions:
-        load_reactions(settings.curated_reactions, session)
     if not args.skip_models:
         f_start_time = time.time()
         logging.info("Loading models")

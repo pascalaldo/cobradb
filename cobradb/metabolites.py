@@ -195,7 +195,7 @@ def add_chebi_annotations(reference_compound_db, chebi_entity, session):
     for (
         data_source_type,
         data_source_source,
-    ), data_source_bigg_id in CHEBI_METABOLITE_PROPERTIES:
+    ), data_source_bigg_id in CHEBI_METABOLITE_PROPERTIES.items():
         data_source_db = session.scalars(
             select(DataSource)
             .filter(DataSource.bigg_id == data_source_bigg_id)
@@ -213,7 +213,7 @@ def add_chebi_annotations(reference_compound_db, chebi_entity, session):
     chebi = reference_compound_db.bigg_id
     annotation_db = session.scalars(
         select(Annotation).filter(Annotation.bigg_id == chebi).limit(1)
-    ).firt()
+    ).first()
     if not annotation_db:
         annotation_db = Annotation(
             bigg_id=chebi,
@@ -256,6 +256,8 @@ def add_chebi_annotations(reference_compound_db, chebi_entity, session):
         data_source_bigg_id = CHEBI_METABOLITE_PROPERTIES.get(
             (database_accession.get_type(), database_accession.get_source())
         )
+        if data_source_bigg_id is None:
+            continue
         prop_val = database_accession.get_accession_number()
         if isinstance(prop_val, str):
             prop_val = prop_val.strip()
@@ -273,7 +275,7 @@ def add_chebi_annotations(reference_compound_db, chebi_entity, session):
             annotation_db.links.append(alias_db)
 
     annotation_mapping = ReferenceCompoundAnnotationMapping(
-        reference_comound=reference_compound_db,
+        reference_compound=reference_compound_db,
     )
     annotation_db.reference_compound_mappings.append(annotation_mapping)
 

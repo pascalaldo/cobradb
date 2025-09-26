@@ -5,7 +5,7 @@ DATA_SOURCE_NAMES = {
     "metanetx.chemical": "MetaNetX Chemical",
     "CHEBI": "CHEBI",
     "drugbank": "DrugBank",
-    "kegg.drugg": "KEGG Drug",
+    "kegg.drug": "KEGG Drug",
     "wikipedia.en": "Wikipedia",
     "hmdb": "HMDB",
 }
