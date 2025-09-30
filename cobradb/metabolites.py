@@ -205,7 +205,11 @@ def add_chebi_annotations(reference_compound_db, chebi_entity, session):
             data_source_db = DataSource(
                 bigg_id=data_source_bigg_id,
                 name=DATA_SOURCE_NAMES[data_source_bigg_id],
-                url_prefix=f"https://identifiers.org/",
+                url_prefix=(
+                    f"https://identifiers.org/"
+                    if data_source_bigg_id == "CHEBI"
+                    else f"https://identifiers.org/{data_source_bigg_id}"
+                ),
             )
             session.add(data_source_db)
         data_source_dbs[data_source_bigg_id] = data_source_db
