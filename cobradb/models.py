@@ -69,7 +69,7 @@ _enum_l = [
     ),
     Enum("L", "R", name="reaction_side"),
     Enum("passed", "failed", "skipped", name="test_result"),
-    Enum("seed", "chebi", name="annotation_type"),
+    Enum("seed", "chebi", "rhea", name="annotation_type"),
     Enum("str", "int", "float", "bool", name="value_type"),
 ]
 custom_enums = {x.name: x for x in _enum_l}
@@ -458,6 +458,9 @@ class Annotation(Base):
     reference_compound_mappings: Mapped[List["ReferenceCompoundAnnotationMapping"]] = (
         relationship(back_populates="annotation")
     )
+    reference_reaction_mappings: Mapped[List["ReferenceReactionAnnotationMapping"]] = (
+        relationship(back_populates="annotation")
+    )
 
 
 class AnnotationProperty(Base):
@@ -555,6 +558,24 @@ class ReferenceCompoundAnnotationMapping(Base):
     annotation_id: Mapped[int] = mapped_column(ForeignKey(Annotation.id))
     annotation: Mapped[Annotation] = relationship(
         back_populates="reference_compound_mappings"
+    )
+
+
+class ReferenceReactionAnnotationMapping(Base):
+    __tablename__ = "reference_reaction_annotation_mapping"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    reference_reaction_id: Mapped[int] = mapped_column(
+        ForeignKey("reference_reaction.id")
+    )
+    reference_reaction: Mapped["ReferenceReaction"] = relationship(
+        back_populates="annotation_mappings"
+    )
+
+    annotation_id: Mapped[int] = mapped_column(ForeignKey(Annotation.id))
+    annotation: Mapped[Annotation] = relationship(
+        back_populates="reference_reaction_mappings"
     )
 
 
@@ -1103,6 +1124,9 @@ class ReferenceReaction(Base):
 
     universal_reactions: Mapped[List["UniversalReaction"]] = relationship(
         back_populates="reference"
+    )
+    annotation_mappings: Mapped[List["ReferenceReactionAnnotationMapping"]] = (
+        relationship(back_populates="reference_reaction")
     )
 
     __table_args__ = (UniqueConstraint("bigg_id"),)

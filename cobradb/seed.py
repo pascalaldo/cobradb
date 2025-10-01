@@ -9,12 +9,11 @@ from cobradb.models import (
     ComponentAnnotationMapping,
     ComponentIDMapping,
     ComponentReferenceMapping,
-    DataSource,
     InChI,
     ReferenceCompound,
     UniversalComponent,
 )
-from cobradb.data_sources import DATA_SOURCE_NAMES
+from cobradb.data_sources import get_data_source_id
 from modelseedpy.biochem import from_local
 import subprocess
 import pandas as pd
@@ -75,23 +74,6 @@ def load_modelseed_database(directory):
 
 
 def push_model_seed_metabolites(modelseed_db, session):
-    data_source_dbs = {}
-    for data_source_bigg_id in SEED_METABOLITE_ALIASES.values():
-        data_source_db = session.scalars(
-            select(DataSource)
-            .filter(DataSource.bigg_id == data_source_bigg_id)
-            .limit(1)
-        ).first()
-        if data_source_db is None:
-            data_source_db = DataSource(
-                bigg_id=data_source_bigg_id,
-                name=DATA_SOURCE_NAMES[data_source_bigg_id],
-                url_prefix=f"https://identifiers.org/{data_source_bigg_id}:",
-            )
-            session.add(data_source_db)
-        data_source_dbs[data_source_bigg_id] = data_source_db
-    session.commit()
-
     for cpd_id in modelseed_db.compounds:
         cpd = modelseed_db.get_seed_compound(cpd_id)
 
@@ -175,7 +157,7 @@ def push_model_seed_metabolites(modelseed_db, session):
             annotation_db = Annotation(
                 bigg_id=annotation_bigg_id,
                 type="seed",
-                default_data_source=data_source_dbs["seed.compound"],
+                default_data_source_id=get_data_source_id("seed.compound", session),
             )
             session.add(annotation_db)
 
@@ -218,7 +200,8 @@ def push_model_seed_metabolites(modelseed_db, session):
 
                 for val in prop_val:
                     alias_db = AnnotationLink(
-                        identifier=val, data_source=data_source_dbs[namespace]
+                        identifier=val,
+                        data_source_id=get_data_source_id(namespace, session),
                     )
                     annotation_db.links.append(alias_db)
 

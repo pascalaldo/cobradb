@@ -2,7 +2,7 @@ from typing import Tuple, Dict, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Bundle
-from cobradb.data_sources import DATA_SOURCE_NAMES
+from cobradb.data_sources import DATA_SOURCE_NAMES, get_data_source_id
 from cobradb.models import (
     Annotation,
     AnnotationLink,
@@ -11,7 +11,6 @@ from cobradb.models import (
     ComponentAnnotationMapping,
     ComponentIDMapping,
     ComponentReferenceMapping,
-    DataSource,
     InChI,
     Model,
     ReferenceCompound,
@@ -191,29 +190,6 @@ CHEBI_METABOLITE_PROPERTIES = {
 
 
 def add_chebi_annotations(reference_compound_db, chebi_entity, session):
-    data_source_dbs = {}
-    for (
-        data_source_type,
-        data_source_source,
-    ), data_source_bigg_id in CHEBI_METABOLITE_PROPERTIES.items():
-        data_source_db = session.scalars(
-            select(DataSource)
-            .filter(DataSource.bigg_id == data_source_bigg_id)
-            .limit(1)
-        ).first()
-        if data_source_db is None:
-            data_source_db = DataSource(
-                bigg_id=data_source_bigg_id,
-                name=DATA_SOURCE_NAMES[data_source_bigg_id],
-                url_prefix=(
-                    f"https://identifiers.org/"
-                    if data_source_bigg_id == "CHEBI"
-                    else f"https://identifiers.org/{data_source_bigg_id}"
-                ),
-            )
-            session.add(data_source_db)
-        data_source_dbs[data_source_bigg_id] = data_source_db
-
     chebi = reference_compound_db.bigg_id
     annotation_db = session.scalars(
         select(Annotation).filter(Annotation.bigg_id == chebi).limit(1)
@@ -222,7 +198,7 @@ def add_chebi_annotations(reference_compound_db, chebi_entity, session):
         annotation_db = Annotation(
             bigg_id=chebi,
             type="chebi",
-            default_data_source=data_source_dbs["CHEBI"],
+            default_data_source_id=get_data_source_id("CHEBI", session),
         )
         session.add(annotation_db)
 
@@ -252,7 +228,7 @@ def add_chebi_annotations(reference_compound_db, chebi_entity, session):
 
     alias_db = AnnotationLink(
         identifier=chebi,
-        data_source=data_source_dbs["CHEBI"],
+        data_source_id=get_data_source_id("CHEBI", session),
     )
     annotation_db.links.append(alias_db)
 
@@ -274,7 +250,8 @@ def add_chebi_annotations(reference_compound_db, chebi_entity, session):
 
         for val in prop_val:
             alias_db = AnnotationLink(
-                identifier=val, data_source=data_source_dbs[data_source_bigg_id]
+                identifier=val,
+                data_source_id=get_data_source_id(data_source_bigg_id, session),
             )
             annotation_db.links.append(alias_db)
 
