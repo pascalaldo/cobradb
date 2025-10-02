@@ -455,6 +455,9 @@ class Annotation(Base):
     component_mappings: Mapped[List["ComponentAnnotationMapping"]] = relationship(
         back_populates="annotation"
     )
+    reaction_mappings: Mapped[List["ReactionAnnotationMapping"]] = relationship(
+        back_populates="annotation"
+    )
     reference_compound_mappings: Mapped[List["ReferenceCompoundAnnotationMapping"]] = (
         relationship(back_populates="annotation")
     )
@@ -541,6 +544,21 @@ class ComponentAnnotationMapping(Base):
     inchi_match: Mapped[Optional[bool]]
     # chebi_match: Mapped[Optional[bool]]
     # rhea_match: Mapped[Optional[bool]]
+
+
+class ReactionAnnotationMapping(Base):
+    __tablename__ = "reaction_annotation_mapping"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    reaction_id: Mapped[int] = mapped_column(ForeignKey("reaction.id"))
+    reaction: Mapped["Reaction"] = relationship(back_populates="annotation_mappings")
+
+    annotation_id: Mapped[int] = mapped_column(ForeignKey(Annotation.id))
+    annotation: Mapped[Annotation] = relationship(back_populates="reaction_mappings")
+
+    bigg_id_match: Mapped[Optional[bool]]
+    pattern_match: Mapped[Optional[bool]]
 
 
 class ReferenceCompoundAnnotationMapping(Base):
@@ -1315,6 +1333,10 @@ class Reaction(Base):
 
     matrix: Mapped[List["ReactionMatrix"]] = relationship(back_populates="reaction")
     model_reactions: Mapped[List["ModelReaction"]] = relationship(
+        back_populates="reaction"
+    )
+
+    annotation_mappings: Mapped[List["ReactionAnnotationMapping"]] = relationship(
         back_populates="reaction"
     )
 

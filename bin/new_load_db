@@ -7,7 +7,7 @@ import shutil
 
 from libchebipy import ChebiEntity
 
-from cobradb.seed import push_model_seed_metabolites
+from cobradb.seed import push_model_seed_metabolites, push_model_seed_reactions
 
 os.environ["LIBCHEBIPY_DOWNLOAD_DIR"] = "/chebi"
 import logging
@@ -69,6 +69,11 @@ parser.add_argument(
 parser.add_argument(
     "--skip-seed-metabolites",
     help="Skip loading SEED metabolite annotations",
+    action="store_true",
+)
+parser.add_argument(
+    "--skip-seed-reactions",
+    help="Skip loading SEED reaction annotations",
     action="store_true",
 )
 args = parser.parse_args()
@@ -346,12 +351,21 @@ def main():
         load_compartments(settings.compartment_names, session)
         session.commit()
 
+    modelseed_db = None
     if not args.skip_seed_metabolites:
         modelseed_dir = "/chebi"
         # seed.download_or_update(modelseed_dir)
         modelseed_db = seed.load_modelseed_database(modelseed_dir)
         push_model_seed_metabolites(modelseed_db, session)
         session.commit()
+    if not args.skip_seed_reactions:
+        modelseed_dir = "/chebi"
+        # seed.download_or_update(modelseed_dir)
+        if modelseed_db is None:
+            modelseed_db = seed.load_modelseed_database(modelseed_dir)
+        push_model_seed_reactions(modelseed_db, session)
+        session.commit()
+
     timings["total"] = time.time() - start_time
     logging.debug(str(timings))
     session.close()

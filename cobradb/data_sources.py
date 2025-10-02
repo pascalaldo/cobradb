@@ -14,8 +14,10 @@ DATA_SOURCE_NAMES = {
     "hmdb": "HMDB",
     "rhea": "RHEA",
     "GO": "GO",
+    "seed.reaction": "seed.reaction",
     "kegg.reaction": "KEGG Reaction",
     "metacyc.reaction": "MetaCyc Reaction",
+    "metanetx.reaction": "MetaNetX Reaction",
     "ec-code": "EC",
 }
 
