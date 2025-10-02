@@ -18,9 +18,8 @@ from cobradb.models import (
     UniversalComponent,
     UniversalComponentReferenceMapping,
 )
-from libchebipy import ChebiEntity
+from cobradb.chebi import ChebiEntity
 import re
-from pprint import pprint
 import pandas as pd
 
 FORMULA_PATTERN = re.compile(r"(([A-Z][a-z]?)([0-9])*)+")

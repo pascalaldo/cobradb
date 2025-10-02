@@ -743,9 +743,13 @@ class Model(Base):
     model_namespace_universal_components: Mapped[List[UniversalComponent]] = (
         relationship(back_populates="model")
     )
+    model_namespace_universal_reactions: Mapped[List["UniversalReaction"]] = (
+        relationship(back_populates="model")
+    )
     model_namespace_reactions: Mapped[List["Reaction"]] = relationship(
         back_populates="model"
     )
+
     model_genes: Mapped[List["ModelGene"]] = relationship(back_populates="model")
     model_reactions: Mapped[List["ModelReaction"]] = relationship(
         back_populates="model"
@@ -1240,6 +1244,11 @@ class UniversalReaction(Base):
     hash: Mapped[str]
     # type = Column(String(20))
     name: Mapped[Optional[str]]
+
+    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey(Model.id))
+    model: Mapped[Optional["Model"]] = relationship(
+        back_populates="model_namespace_universal_reactions"
+    )
 
     reference_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey(ReferenceReaction.id)

@@ -843,7 +843,7 @@ def load_reactions(
             for m, coeff in reaction.metabolites.items()
         ]
         reaction_hash = Reaction.generate_hash(participants)
-        print(f"reaction hash 0: {reaction_hash}")
+        # print(f"reaction hash 0: {reaction_hash}")
 
         # Get the reaction
         reaction_db = session.scalars(
@@ -869,7 +869,7 @@ def load_reactions(
             universal_reaction_hash = UniversalReaction.generate_hash(
                 universal_participants
             )
-            print(f"universal hash 0: {universal_reaction_hash}")
+            # print(f"universal hash 0: {universal_reaction_hash}")
             universal_reaction_db = session.scalars(
                 select(UniversalReaction)
                 .filter(UniversalReaction.hash == universal_reaction_hash)

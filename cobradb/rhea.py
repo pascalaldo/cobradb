@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from sqlalchemy import select
+from cobradb.chebi import ChebiEntity
 from cobradb.data_sources import get_data_source_id
 from cobradb.metabolites import get_or_create_small_molecule_reference
 from cobradb.models import *
@@ -10,7 +11,6 @@ import re
 import logging
 
 from rdflib import Graph, Namespace
-from libchebipy import ChebiEntity
 import re
 
 RHEA = Namespace("http://rdf.rhea-db.org/")
