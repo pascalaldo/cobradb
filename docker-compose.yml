@@ -22,7 +22,7 @@ services:
     tty: true
   biggr-db:
     container_name: cobradb-postgres
-    image: postgres
+    image: postgres:17.6
     command: -c config_file=/etc/postgresql.conf
     restart: always
     volumes:

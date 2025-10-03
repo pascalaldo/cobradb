@@ -315,6 +315,7 @@ def load_memote_results(model_bigg_id, filename, session):
                         ] = model_comp_comp_db.id
                     else:
                         print(f"Type of test currently not implemented: {test_type}")
+                        print(test_result)
 
                     if is_dict:
                         if prop in ["data", "metric", "duration"]:

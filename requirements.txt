@@ -20,3 +20,4 @@ rdflib
 libChEBIpy
 click
 memote==0.17.0
+modelseedpy

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 
 from sqlalchemy import select
+from cobradb.chebi import ChebiEntity
+from cobradb.data_sources import get_data_source_id
 from cobradb.metabolites import get_or_create_small_molecule_reference
 from cobradb.models import *
 from cobradb.util import timing
@@ -9,8 +11,6 @@ import re
 import logging
 
 from rdflib import Graph, Namespace
-from rdflib.namespace import RDF
-from libchebipy import ChebiEntity
 import re
 
 RHEA = Namespace("http://rdf.rhea-db.org/")
@@ -20,7 +20,18 @@ BIOPAX = Namespace("http://www.biopax.org/release/biopax-level3.owl#")
 EC = Namespace("http://purl.uniprot.org/enzyme/")
 
 CHEBI_URI_PATTERN = re.compile(r"https?://purl\.obolibrary\.org/obo/CHEBI_([0-9]+)")
+
 EC_URI_PATTERN = re.compile(r"https?://purl\.uniprot\.org/enzyme/([0-9\.\-n]+)")
+GO_URI_PATTERN = re.compile(r"https?://purl\.obolibrary\.org/obo/GO_([0-9]+)")
+KEGG_URI_PATTERN = re.compile(r"https?://identifiers\.org/kegg\.reaction/(R[0-9]+)")
+METACYC_URI_PATTERN = re.compile(r"https?://identifiers\.org/biocyc/METACYC:(.+)")
+
+ANNOTATION_PATTERNS = {
+    "ec-code": EC_URI_PATTERN,
+    "GO": GO_URI_PATTERN,
+    "kegg.reaction": KEGG_URI_PATTERN,
+    "metacyc.reaction": METACYC_URI_PATTERN,
+}
 
 
 def create_hierarchical_conversion_reaction(lhs_chebi, rhs_chebi, session):
@@ -243,6 +254,35 @@ def add_reference_conversion_reactions(compound_db, session):
             session.commit()
 
 
+def add_reaction_annotations(reaction_db, reaction, session):
+    default_data_source_id = get_data_source_id("rhea", session)
+    if default_data_source_id is None:
+        print("Could not find RHEA data source.")
+        return
+    annotation_db = Annotation(
+        bigg_id=reaction["accession"],
+        default_data_source_id=default_data_source_id,
+        type="rhea",
+    )
+    mapping = ReferenceReactionAnnotationMapping(
+        reference_reaction=reaction_db,
+    )
+    annotation_db.reference_reaction_mappings.append(mapping)
+    annotations = reaction.get("annotations", {})
+    for namespace, identifiers in annotations.items():
+        data_source_id = get_data_source_id(namespace, session)
+        if not data_source_id:
+            print(f"Unknown data source: {namespace}")
+            continue
+        for identifier in identifiers:
+            link = AnnotationLink(
+                data_source_id=data_source_id,
+                identifier=identifier,
+            )
+            annotation_db.links.append(link)
+    session.add(annotation_db)
+
+
 @timing
 def push_rhea_reference(rhea_db, session):
     n_reactive_parts = len(rhea_db["reactive_parts"])
@@ -320,6 +360,8 @@ def push_rhea_reference(rhea_db, session):
         if len(reaction_db.reaction_participants) > 0:
             reaction_db.update_hash()
             session.add(reaction_db)
+
+            add_reaction_annotations(reaction_db, reaction, session)
 
     session.commit()
     session.close()
@@ -514,6 +556,18 @@ def determine_compartment(graph, participant):
     raise ValueError("Unknown comparment")
 
 
+def add_annotation(uri, annotations):
+    for namespace, pattern in ANNOTATION_PATTERNS.items():
+        m = pattern.fullmatch(uri)
+        if m:
+            identifier = m.group(1)
+            if namespace in annotations:
+                annotations[namespace].append(identifier)
+            else:
+                annotations[namespace] = [identifier]
+            break
+
+
 # Extract and print reaction info
 def extract_reactions(graph: Graph):
     coefficients = get_coefficients(graph)
@@ -529,14 +583,32 @@ def extract_reactions(graph: Graph):
         # direction = get_single_object(graph, reaction, RHEA.direction).split("#")[-1]
         # status = get_single_object(graph, reaction, RHEA.status)
         accession = get_single_object(graph, reaction, RHEA.accession).toPython()
-        ec = [get_ec_from_uri(x) for x in graph.objects(reaction, RHEA.ec)]
+        # ec = [get_ec_from_uri(x) for x in graph.objects(reaction, RHEA.ec)]
+
+        all_reaction_variants = [reaction]
+        all_reaction_variants.extend(graph.objects(reaction, RHEA.directionalReaction))
+        all_reaction_variants.extend(
+            graph.objects(reaction, RHEA.bidirectionalReaction)
+        )
+
+        annotations = {"rhea": []}
+        for r in all_reaction_variants:
+            annotations["rhea"].append(
+                str(
+                    get_single_object(graph, r, RHEA.accession).toPython()
+                ).removeprefix("RHEA:")
+            )
+            for x in graph.objects(r, RDF.seeAlso):
+                add_annotation(x, annotations)
+            for x in graph.objects(r, RHEA.ec):
+                add_annotation(x, annotations)
 
         reaction_info = {
             "accession": accession,
             "equation": equation,
             # "direction": direction,
             # "status": status,
-            "ec": ec,
+            "annotations": annotations,
         }
         participants = []
 

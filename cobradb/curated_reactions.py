@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 
-from sqlalchemy.orm import Bundle, aliased
 from cobradb.models import *
 from cobradb.util import timing
 
-from sqlalchemy import cast, func
+from sqlalchemy import func
 from sqlalchemy import select
 import logging
 import json
@@ -337,11 +336,28 @@ def push_reactions(data, session):
             session=session,
         )
 
+        reaction_model_bigg_id = reaction_data.get("model_bigg_id")
+        if reaction_model_bigg_id is None:
+            reaction_model = None
+        else:
+            reaction_model = session.scalars(
+                select(Model).filter(Model.bigg_id == reaction_model_bigg_id).limit(1)
+            ).first()
+
+        if reaction_model is None:
+            universal_reaction_model_cond = UniversalReaction.model_id == None
+        else:
+            universal_reaction_model_cond = (UniversalReaction.model_id == None) | (
+                UniversalReaction.model_id == reaction_model.id
+            )
+
         universal_reaction_db = session.scalars(
             select(UniversalReaction)
             .filter(UniversalReaction.bigg_id == bigg_id)
+            .filter(universal_reaction_model_cond)
             .limit(1)
         ).first()
+
         # if not universal_reaction_db:
         #     universal_reaction_db = UniversalReaction(
         #         id=bigg_id, name=db_entry.name, reference_id=db_entry.id
@@ -353,13 +369,9 @@ def push_reactions(data, session):
         #     continue
         #
 
-        reaction_model_id = reaction_data.get("model_id")
-        if reaction_model_id is None:
-            reaction_model = None
-        else:
-            reaction_model = session.scalars(
-                select(Model).filter(Model.bigg_id == reaction_model_id).limit(1)
-            ).first()
+        is_biomass_reaction = reference_db is None and "BIOMASS" in bigg_id.upper()
+        if is_biomass_reaction and reaction_model is not None:
+            bigg_id = bigg_id.removeprefix(f"__{reaction_model.bigg_id}__")
 
         universal_reaction_matrix_info = []
         reaction_matrix_info = []
@@ -584,6 +596,7 @@ def push_reactions(data, session):
         universal_reaction_db = session.scalars(
             select(UniversalReaction)
             .filter(UniversalReaction.hash == universal_reaction_hash)
+            .filter(universal_reaction_model_cond)
             .limit(1)
         ).first()
         print(f"universal hash 1: {universal_reaction_hash}")
@@ -604,6 +617,7 @@ def push_reactions(data, session):
                 name=reaction_name,
                 reference=reference_db,
                 hash=universal_reaction_hash,
+                model=reaction_model,
             )
             session.add(universal_reaction_db)
 
@@ -691,6 +705,20 @@ def push_reactions(data, session):
             # session.commit()
         else:
             print(reaction_db)
+
+        if is_biomass_reaction:
+            biomass_reference_db = session.scalars(
+                select(ReferenceReaction)
+                .filter(ReferenceReaction.bigg_id == "BiGGr:BIOMASS")
+                .limit(1)
+            ).first()
+            if biomass_reference_db is None:
+                biomass_reference_db = ReferenceReaction(
+                    bigg_id="BiGGr:BIOMASS",
+                    name="Biomass reaction",
+                    hash="#BIOMASS",
+                )
+            universal_reaction_db.reference = biomass_reference_db
         session.commit()
         print(f"TIME: BIGLOOP: {(t1 := time.time()) - t0}")
         t0 = t1

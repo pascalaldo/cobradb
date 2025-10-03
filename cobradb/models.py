@@ -69,6 +69,8 @@ _enum_l = [
     ),
     Enum("L", "R", name="reaction_side"),
     Enum("passed", "failed", "skipped", name="test_result"),
+    Enum("seed", "chebi", "rhea", name="annotation_type"),
+    Enum("str", "int", "float", "bool", name="value_type"),
 ]
 custom_enums = {x.name: x for x in _enum_l}
 
@@ -269,6 +271,9 @@ class ReferenceCompound(Base):
     reference_mappings: Mapped[List["ComponentReferenceMapping"]] = relationship(
         back_populates="reference_compound"
     )
+    annotation_mappings: Mapped[List["ReferenceCompoundAnnotationMapping"]] = (
+        relationship(back_populates="reference_compound")
+    )
 
     __table_args__ = (UniqueConstraint("bigg_id"),)
 
@@ -346,6 +351,10 @@ class Component(Base):
         back_populates="component"
     )
 
+    annotation_mappings: Mapped[List["ComponentAnnotationMapping"]] = relationship(
+        back_populates="component"
+    )
+
     # __mapper_args__ = {"polymorphic_identity": "component", "polymorphic_on": type}
 
     __table_args__ = (UniqueConstraint("bigg_id"),)
@@ -390,6 +399,10 @@ class ComponentReferenceMapping(Base):
 
     reference_n: Mapped[Optional[int]]
 
+    universal_component_reference_mapping: Mapped[
+        Optional["UniversalComponentReferenceMapping"]
+    ] = relationship(back_populates="mapping")
+
 
 class UniversalComponentReferenceMapping(Base):
     __tablename__ = "universal_component_reference_mapping"
@@ -400,7 +413,9 @@ class UniversalComponentReferenceMapping(Base):
     )
 
     mapping_id: Mapped[int] = mapped_column(ForeignKey(ComponentReferenceMapping.id))
-    mapping: Mapped[ComponentReferenceMapping] = relationship()
+    mapping: Mapped[ComponentReferenceMapping] = relationship(
+        back_populates="universal_component_reference_mapping"
+    )
 
 
 class DataSource(Base):
@@ -413,6 +428,13 @@ class DataSource(Base):
 
     synonyms: Mapped[List["Synonym"]] = relationship(back_populates="data_source")
 
+    annotations: Mapped[List["Annotation"]] = relationship(
+        back_populates="default_data_source"
+    )
+    annotation_links: Mapped[List["AnnotationLink"]] = relationship(
+        back_populates="data_source"
+    )
+
     __table_args__ = (UniqueConstraint("bigg_id"),)
 
     def __repr__(self):
@@ -420,6 +442,165 @@ class DataSource(Base):
             "<cobradb DataSource(id={self.id}, bigg_id={self.bigg_id}, "
             "name={self.name}, url_prefix={self.url_prefix})>"
         ).format(self=self)
+
+
+class Annotation(Base):
+    __tablename__ = "annotation"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    bigg_id: Mapped[str]
+    type = mapped_column(custom_enums["annotation_type"])
+    default_data_source_id: Mapped[int] = mapped_column(ForeignKey(DataSource.id))
+    default_data_source: Mapped[DataSource] = relationship(back_populates="annotations")
+
+    properties: Mapped[List["AnnotationProperty"]] = relationship(
+        back_populates="annotation"
+    )
+    links: Mapped[List["AnnotationLink"]] = relationship(back_populates="annotation")
+    component_mappings: Mapped[List["ComponentAnnotationMapping"]] = relationship(
+        back_populates="annotation"
+    )
+    reaction_mappings: Mapped[List["ReactionAnnotationMapping"]] = relationship(
+        back_populates="annotation"
+    )
+    reference_compound_mappings: Mapped[List["ReferenceCompoundAnnotationMapping"]] = (
+        relationship(back_populates="annotation")
+    )
+    reference_reaction_mappings: Mapped[List["ReferenceReactionAnnotationMapping"]] = (
+        relationship(back_populates="annotation")
+    )
+
+
+class AnnotationProperty(Base):
+    __tablename__ = "annotation_property"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str]
+    value_str: Mapped[Optional[str]]
+    value_int: Mapped[Optional[int]]
+    value_float: Mapped[Optional[float]]
+    type = mapped_column(custom_enums["value_type"])
+
+    annotation_id: Mapped[int] = mapped_column(ForeignKey(Annotation.id))
+    annotation: Mapped[Annotation] = relationship(back_populates="properties")
+
+    @hybrid_property
+    def value(self):
+        if self.type == "str":
+            return self.value_str
+        if self.type == "int":
+            return self.value_int
+        if self.type == "float":
+            return self.value_float
+        if self.type == "bool":
+            return bool(self.value_int)
+        return None
+
+    @value.inplace.setter
+    def _value_setter(self, val):
+        if isinstance(val, bool):
+            self.type = "bool"
+            self.value_str = None
+            self.value_int = int(val)
+            self.value_float = None
+        elif isinstance(val, float):
+            self.type = "float"
+            self.value_str = None
+            self.value_int = None
+            self.value_float = val
+        elif isinstance(val, int):
+            self.type = "int"
+            self.value_str = None
+            self.value_int = val
+            self.value_float = None
+        else:
+            self.type = "str"
+            self.value_str = str(val)
+            self.value_int = None
+            self.value_float = None
+
+
+class AnnotationLink(Base):
+    __tablename__ = "annotation_link"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    identifier: Mapped[str]
+
+    data_source_id: Mapped[int] = mapped_column(ForeignKey(DataSource.id))
+    data_source: Mapped[DataSource] = relationship(back_populates="annotation_links")
+
+    annotation_id: Mapped[int] = mapped_column(ForeignKey(Annotation.id))
+    annotation: Mapped[Annotation] = relationship(back_populates="links")
+
+
+class ComponentAnnotationMapping(Base):
+    __tablename__ = "component_annotation_mapping"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    component_id: Mapped[int] = mapped_column(ForeignKey("component.id"))
+    component: Mapped["Component"] = relationship(back_populates="annotation_mappings")
+
+    annotation_id: Mapped[int] = mapped_column(ForeignKey(Annotation.id))
+    annotation: Mapped[Annotation] = relationship(back_populates="component_mappings")
+
+    reference_match: Mapped[bool] = mapped_column(default=False)
+    bigg_id_match: Mapped[Optional[bool]]
+    inchi_match: Mapped[Optional[bool]]
+    # chebi_match: Mapped[Optional[bool]]
+    # rhea_match: Mapped[Optional[bool]]
+
+
+class ReactionAnnotationMapping(Base):
+    __tablename__ = "reaction_annotation_mapping"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    reaction_id: Mapped[int] = mapped_column(ForeignKey("reaction.id"))
+    reaction: Mapped["Reaction"] = relationship(back_populates="annotation_mappings")
+
+    annotation_id: Mapped[int] = mapped_column(ForeignKey(Annotation.id))
+    annotation: Mapped[Annotation] = relationship(back_populates="reaction_mappings")
+
+    bigg_id_match: Mapped[Optional[bool]]
+    pattern_match: Mapped[Optional[bool]]
+
+
+class ReferenceCompoundAnnotationMapping(Base):
+    __tablename__ = "reference_compound_annotation_mapping"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    reference_compound_id: Mapped[int] = mapped_column(
+        ForeignKey("reference_compound.id")
+    )
+    reference_compound: Mapped["ReferenceCompound"] = relationship(
+        back_populates="annotation_mappings"
+    )
+
+    annotation_id: Mapped[int] = mapped_column(ForeignKey(Annotation.id))
+    annotation: Mapped[Annotation] = relationship(
+        back_populates="reference_compound_mappings"
+    )
+
+
+class ReferenceReactionAnnotationMapping(Base):
+    __tablename__ = "reference_reaction_annotation_mapping"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    reference_reaction_id: Mapped[int] = mapped_column(
+        ForeignKey("reference_reaction.id")
+    )
+    reference_reaction: Mapped["ReferenceReaction"] = relationship(
+        back_populates="annotation_mappings"
+    )
+
+    annotation_id: Mapped[int] = mapped_column(ForeignKey(Annotation.id))
+    annotation: Mapped[Annotation] = relationship(
+        back_populates="reference_reaction_mappings"
+    )
 
 
 class Synonym(Base):
@@ -568,9 +749,13 @@ class Model(Base):
     model_namespace_universal_components: Mapped[List[UniversalComponent]] = (
         relationship(back_populates="model")
     )
+    model_namespace_universal_reactions: Mapped[List["UniversalReaction"]] = (
+        relationship(back_populates="model")
+    )
     model_namespace_reactions: Mapped[List["Reaction"]] = relationship(
         back_populates="model"
     )
+
     model_genes: Mapped[List["ModelGene"]] = relationship(back_populates="model")
     model_reactions: Mapped[List["ModelReaction"]] = relationship(
         back_populates="model"
@@ -968,6 +1153,9 @@ class ReferenceReaction(Base):
     universal_reactions: Mapped[List["UniversalReaction"]] = relationship(
         back_populates="reference"
     )
+    annotation_mappings: Mapped[List["ReferenceReactionAnnotationMapping"]] = (
+        relationship(back_populates="reference_reaction")
+    )
 
     __table_args__ = (UniqueConstraint("bigg_id"),)
 
@@ -1063,6 +1251,11 @@ class UniversalReaction(Base):
     # type = Column(String(20))
     name: Mapped[Optional[str]]
 
+    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey(Model.id))
+    model: Mapped[Optional["Model"]] = relationship(
+        back_populates="model_namespace_universal_reactions"
+    )
+
     reference_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey(ReferenceReaction.id)
     )
@@ -1081,7 +1274,7 @@ class UniversalReaction(Base):
     __table_args__ = (UniqueConstraint("bigg_id"),)
     # __mapper_args__ = {"polymorphic_identity": "reaction", "polymorphic_on": type}
 
-    def get_sbo(self):
+    def get_sbo(self, reference):
         bare_id = str(self.id)
         if bare_id.startswith("__"):
             bare_id = bare_id[2:]
@@ -1095,8 +1288,9 @@ class UniversalReaction(Base):
             return "SBO:0000632"
         if bare_id.startswith("DM_"):
             return "SBO:0000628"
-        if bare_id.startswith("BIOMASS"):
-            return "SBO:0000629"
+        if reference is not None:
+            if reference.bigg_id == "BiGGr:BIOMASS":
+                return "SBO:0000629"
 
         return "SBO:0000176"
 
@@ -1155,6 +1349,10 @@ class Reaction(Base):
 
     matrix: Mapped[List["ReactionMatrix"]] = relationship(back_populates="reaction")
     model_reactions: Mapped[List["ModelReaction"]] = relationship(
+        back_populates="reaction"
+    )
+
+    annotation_mappings: Mapped[List["ReactionAnnotationMapping"]] = relationship(
         back_populates="reaction"
     )
 
