@@ -1290,7 +1290,7 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
                     model_db_rxn_ids[reaction.id], reaction.id, model.id
                 )
             )
-    continue
+        continue
         for gene in reaction.genes:
             gene_bigg_id_to_model_reaction_db_ids[gene.id].add(model_reaction_db.id)
 
