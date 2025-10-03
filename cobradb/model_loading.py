@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from cobra.io import save_json_model, save_yaml_model, write_sbml_model
+from sqlalchemy.orm import aliased, joinedload
 from cobradb.curated_reactions import push_reactions
 from cobradb.metabolites import (
     are_explicit_formulae_equivalent,
@@ -857,6 +858,54 @@ def load_reactions(
         ).first()
 
         if reaction_db is None:
+            # universal_participants_d = {}
+            # for m, coeff in reaction.metabolites.items():
+            #     comp_comp_bigg_id = m.id if ":" in m.id else f"{m.id}:{int(m.charge)}"
+            #     default_cc_alias = aliased(CompartmentalizedComponent)
+            #     default_c_alias = aliased(Component)
+            #     default_db = session.execute(
+            #         select(default_cc_alias, default_c_alias, UniversalCompartmentalizedComponent, Compartment, CompartmentalizedComponent, Component).join(
+            #             default_c_alias,
+            #             default_cc_alias.component_id == default_c_alias.id,
+            #         )
+            #         .join(default_cc_alias.compartment)
+            #         .join(default_cc_alias.universal_compartmentalized_component)
+            #         .join(default_c_alias.reference_mappings)
+            #         .join(ComponentReferenceMapping.universal_component_reference_mapping)
+            #         .join(ComponentReferenceMapping.component)
+            #         .join(CompartmentalizedComponent, (CompartmentalizedComponent.component_id == Component.id) & (CompartmentalizedComponent.compartment_id == default_cc_alias.compartment_id))
+            #         .filter(CompartmentalizedComponent.bigg_id == comp_comp_bigg_id)
+            #         .limit(1)
+            #     ).first()
+            #
+            #     if default_db is None:
+            #         ucc_bigg_id = compartmentalized_id_to_universal_compartmentalized_id(
+            #                 comp_comp_db_ids.get(m.id, m.id)
+            #             )
+            #         u_part = [dict(
+            #             universal_compartmentalized_component_bigg_id=ucc_bigg_id,
+            #             coefficient=coeff,
+            #         )]
+            #     else:
+            #         default_cc_db, default_c_db, default_ucc_db, compartment_db, cc_db, c_db = default_db
+            #         u_part = [dict(
+            #             universal_compartmentalized_component_bigg_id=default_ucc_db,
+            #             coefficient=coeff,
+            #         )]
+            #         if default_c_db.charge != c_db.charge:
+            #             u_part.append(
+            #                 dict(
+            #                     universal_compartmentalized_component_bigg_id=f"h_{compartment_db.bigg_id}",
+            #                     coefficient=(c_db.charge - default_c_db.charge)*coeff,
+            #                 )
+            #             )
+            #     for p in u_part:
+            #         ucc_bigg_id = p["univeral_compartmentalized_component_bigg_id"]
+            #         if ucc_bigg_id in universal_participants_d:
+            #             universal_participants_d[ucc_bigg_id]["coefficient"] += p["coefficient"]
+            #         else:
+            #             universal_participants_d[ucc_bigg_id] = p
+            # universal_participants = [v for v in universal_participants_d.values() if v["coefficient"] != 0]
             universal_participants = [
                 dict(
                     universal_compartmentalized_component_bigg_id=compartmentalized_id_to_universal_compartmentalized_id(
@@ -869,7 +918,7 @@ def load_reactions(
             universal_reaction_hash = UniversalReaction.generate_hash(
                 universal_participants
             )
-            # print(f"universal hash 0: {universal_reaction_hash}")
+            print(f"universal hash 0: {universal_reaction_hash}")
             universal_reaction_db = session.scalars(
                 select(UniversalReaction)
                 .filter(UniversalReaction.hash == universal_reaction_hash)
@@ -1044,7 +1093,7 @@ def load_reactions(
         reaction.annotation["sbo"] = "SBO:0000176"
         if uni_ref_db is not None:
             universal_db, reference_db = uni_ref_db
-            reaction.annotation["sbo"] = universal_db.get_sbo()
+            reaction.annotation["sbo"] = universal_db.get_sbo(reference_db)
             if reference_db is not None:
                 if reference_db.bigg_id.startswith("RHEA:"):
                     reaction.annotation["rhea"] = reference_db.bigg_id
@@ -1241,7 +1290,7 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
                     model_db_rxn_ids[reaction.id], reaction.id, model.id
                 )
             )
-            continue
+    continue
         for gene in reaction.genes:
             gene_bigg_id_to_model_reaction_db_ids[gene.id].add(model_reaction_db.id)
 

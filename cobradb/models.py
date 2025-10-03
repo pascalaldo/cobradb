@@ -399,6 +399,10 @@ class ComponentReferenceMapping(Base):
 
     reference_n: Mapped[Optional[int]]
 
+    universal_component_reference_mapping: Mapped[
+        Optional["UniversalComponentReferenceMapping"]
+    ] = relationship(back_populates="mapping")
+
 
 class UniversalComponentReferenceMapping(Base):
     __tablename__ = "universal_component_reference_mapping"
@@ -409,7 +413,9 @@ class UniversalComponentReferenceMapping(Base):
     )
 
     mapping_id: Mapped[int] = mapped_column(ForeignKey(ComponentReferenceMapping.id))
-    mapping: Mapped[ComponentReferenceMapping] = relationship()
+    mapping: Mapped[ComponentReferenceMapping] = relationship(
+        back_populates="universal_component_reference_mapping"
+    )
 
 
 class DataSource(Base):
@@ -1268,7 +1274,7 @@ class UniversalReaction(Base):
     __table_args__ = (UniqueConstraint("bigg_id"),)
     # __mapper_args__ = {"polymorphic_identity": "reaction", "polymorphic_on": type}
 
-    def get_sbo(self):
+    def get_sbo(self, reference):
         bare_id = str(self.id)
         if bare_id.startswith("__"):
             bare_id = bare_id[2:]
@@ -1282,8 +1288,9 @@ class UniversalReaction(Base):
             return "SBO:0000632"
         if bare_id.startswith("DM_"):
             return "SBO:0000628"
-        if bare_id.startswith("BIOMASS"):
-            return "SBO:0000629"
+        if reference is not None:
+            if reference.bigg_id == "BiGGr:BIOMASS":
+                return "SBO:0000629"
 
         return "SBO:0000176"
 

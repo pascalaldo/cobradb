@@ -600,6 +600,8 @@ def extract_reactions(graph: Graph):
             )
             for x in graph.objects(r, RDF.seeAlso):
                 add_annotation(x, annotations)
+            for x in graph.objects(r, RHEA.ec):
+                add_annotation(x, annotations)
 
         reaction_info = {
             "accession": accession,

@@ -5,7 +5,6 @@
 import os
 import shutil
 
-from libchebipy import ChebiEntity
 
 from cobradb.seed import push_model_seed_metabolites, push_model_seed_reactions
 
@@ -19,7 +18,7 @@ from sqlalchemy.orm import close_all_sessions
 
 from cobradb.compartments import load_compartments
 from cobradb.component_loading import load_assembly
-
+from cobradb.chebi import ChebiEntity, parse_structures
 from cobradb.curated_reactions import load_reactions
 from cobradb.models import *
 from cobradb import seed, settings, util
@@ -133,6 +132,7 @@ def main():
             # Load a random chebi entity and access all relevant information.
             # Will download all appropriate files for all compounds.
             c = ChebiEntity("CHEBI:27732")
+            parse_structures()
             c.get_id()
             c.get_charge()
             c.get_names()
