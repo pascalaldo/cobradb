@@ -106,6 +106,11 @@ class Base(DeclarativeBase):
     pass
 
 
+class BiGGBase:
+    id: Mapped[int]
+    bigg_id: Mapped[str]
+
+
 class DatabaseVersion(Base):
     __tablename__ = "database_version"
 
@@ -218,17 +223,16 @@ class Chromosome(Base):
         )
 
 
-class GenomeRegion(Base):
+class GenomeRegion(Base, BiGGBase):
     __tablename__ = "genome_region"
-
     id: Mapped[int] = mapped_column(primary_key=True)
+    bigg_id: Mapped[str]
 
     chromosome_id: Mapped[Optional[int]] = mapped_column(ForeignKey("chromosome.id"))
     chromosome: Mapped[Optional["Chromosome"]] = relationship(
         back_populates="genome_regions"
     )
 
-    bigg_id: Mapped[str]
     leftpos: Mapped[Optional[int]]
     rightpos: Mapped[Optional[int]]
     strand: Mapped[Optional[str]] = mapped_column(String(1))
@@ -246,11 +250,11 @@ class GenomeRegion(Base):
         )
 
 
-class ReferenceCompound(Base):
+class ReferenceCompound(Base, BiGGBase):
     __tablename__ = "reference_compound"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
+
     name: Mapped[str]
     html_name: Mapped[Optional[str]]
     compound_type = mapped_column(custom_enums["compound_type"], nullable=False)
@@ -287,11 +291,11 @@ class ReferenceCompound(Base):
         )
 
 
-class UniversalComponent(Base):
+class UniversalComponent(Base, BiGGBase):
     __tablename__ = "universal_component"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
+
     name: Mapped[Optional[str]]
     components: Mapped[List["Component"]] = relationship(
         back_populates="universal_component"
@@ -320,9 +324,8 @@ class UniversalComponent(Base):
     __table_args__ = (UniqueConstraint("bigg_id"),)
 
 
-class Component(Base):
+class Component(Base, BiGGBase):
     __tablename__ = "component"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
@@ -403,6 +406,8 @@ class ComponentReferenceMapping(Base):
         Optional["UniversalComponentReferenceMapping"]
     ] = relationship(back_populates="mapping")
 
+    __table_args__ = (UniqueConstraint("component_id", "reference_compound_id"),)
+
 
 class UniversalComponentReferenceMapping(Base):
     __tablename__ = "universal_component_reference_mapping"
@@ -418,11 +423,11 @@ class UniversalComponentReferenceMapping(Base):
     )
 
 
-class DataSource(Base):
+class DataSource(Base, BiGGBase):
     __tablename__ = "data_source"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
+
     name: Mapped[Optional[str]]
     url_prefix: Mapped[Optional[str]]
 
@@ -444,12 +449,11 @@ class DataSource(Base):
         ).format(self=self)
 
 
-class Annotation(Base):
+class Annotation(Base, BiGGBase):
     __tablename__ = "annotation"
-
     id: Mapped[int] = mapped_column(primary_key=True)
-
     bigg_id: Mapped[str]
+
     type = mapped_column(custom_enums["annotation_type"])
     default_data_source_id: Mapped[int] = mapped_column(ForeignKey(DataSource.id))
     default_data_source: Mapped[DataSource] = relationship(back_populates="annotations")
@@ -726,9 +730,8 @@ class DeprecatedID(Base):
         )
 
 
-class Model(Base):
+class Model(Base, BiGGBase):
     __tablename__ = "model"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
@@ -802,9 +805,8 @@ class ModelGene(Base):
     __table_args__ = (UniqueConstraint("model_id", "gene_id"),)
 
 
-class ModelReaction(Base):
+class ModelReaction(Base, BiGGBase):
     __tablename__ = "model_reaction"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
@@ -887,9 +889,8 @@ class GeneReactionMatrix(Base):
         )
 
 
-class UniversalCompartmentalizedComponent(Base):
+class UniversalCompartmentalizedComponent(Base, BiGGBase):
     __tablename__ = "universal_compartmentalized_component"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
@@ -918,9 +919,8 @@ class UniversalCompartmentalizedComponent(Base):
     __table_args__ = (UniqueConstraint("bigg_id"),)
 
 
-class CompartmentalizedComponent(Base):
+class CompartmentalizedComponent(Base, BiGGBase):
     __tablename__ = "compartmentalized_component"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
@@ -985,11 +985,11 @@ class ModelCompartmentalizedComponent(Base):
     __table_args__ = (UniqueConstraint("compartmentalized_component_id", "model_id"),)
 
 
-class Compartment(Base):
+class Compartment(Base, BiGGBase):
     __tablename__ = "compartment"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
+
     name: Mapped[str]
 
     universal_compartmentalized_components: Mapped[
@@ -1060,7 +1060,6 @@ class Gene(GenomeRegion):
         ForeignKey("genome_region.id", onupdate="CASCADE", ondelete="CASCADE"),
         primary_key=True,
     )
-    bigg_id: Mapped[str]
     name: Mapped[Optional[str]]
     locus_tag: Mapped[Optional[str]]
     mapped_to_genbank: Mapped[bool]
@@ -1074,7 +1073,7 @@ class Gene(GenomeRegion):
 
     model_genes: Mapped[List[ModelGene]] = relationship(back_populates="gene")
 
-    __table_args__ = (UniqueConstraint("bigg_id"),)
+    # __table_args__ = (UniqueConstraint("bigg_id"),)
     __mapper_args__ = {"polymorphic_identity": "gene"}
 
     def __repr__(self):
@@ -1085,9 +1084,8 @@ class Gene(GenomeRegion):
         )
 
 
-class ReferenceReactivePart(Base):
+class ReferenceReactivePart(Base, BiGGBase):
     __tablename__ = "reference_reactive_part"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
@@ -1135,9 +1133,8 @@ class ReferenceReactivePartMatrix(Base):
         ).format(self=self)
 
 
-class ReferenceReaction(Base):
+class ReferenceReaction(Base, BiGGBase):
     __tablename__ = "reference_reaction"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
@@ -1241,9 +1238,8 @@ class ReferenceReactionParticipant(Base):
         )
 
 
-class UniversalReaction(Base):
+class UniversalReaction(Base, BiGGBase):
     __tablename__ = "universal_reaction"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
@@ -1327,9 +1323,8 @@ class UniversalReaction(Base):
         return hash_str
 
 
-class Reaction(Base):
+class Reaction(Base, BiGGBase):
     __tablename__ = "reaction"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
@@ -1491,9 +1486,8 @@ class ComponentIDMapping(Base):
 
 
 # MEMOTE-related models
-class MemoteTest(Base):
+class MemoteTest(Base, BiGGBase):
     __tablename__ = "memote_test"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 

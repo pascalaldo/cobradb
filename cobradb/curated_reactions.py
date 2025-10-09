@@ -1,6 +1,22 @@
-# -*- coding: utf-8 -*-
-
-from cobradb.models import *
+from sqlalchemy.orm import Session
+from cobradb.models import (
+    Compartment,
+    CompartmentalizedComponent,
+    Component,
+    ComponentIDMapping,
+    ComponentReferenceMapping,
+    Model,
+    Reaction,
+    ReactionMatrix,
+    ReferenceCompound,
+    ReferenceReaction,
+    ReferenceReactionParticipant,
+    UniversalCompartmentalizedComponent,
+    UniversalComponent,
+    UniversalComponentReferenceMapping,
+    UniversalReaction,
+    UniversalReactionMatrix,
+)
 from cobradb.util import timing
 
 from sqlalchemy import func
@@ -148,7 +164,7 @@ def match_reaction_data_with_db_entry(parsed_participants, db_entry, session):
         return successful_mappings[0]
 
 
-def parse_reaction_participants(participants, session):
+def parse_reaction_participants(session: Session, participants):
     parsed_participants = []
     for i, side in enumerate("LR"):
         for p in participants[i]:
@@ -291,7 +307,7 @@ def find_reference_reaction(proposed_ids, parsed_participants, session):
 
 
 @timing
-def push_reactions(data, session):
+def push_reactions(session: Session, data):
     for n, (bigg_id, reaction_data) in enumerate(data.items()):
         # universal_reaction_db = (
         #     session.query(UniversalReaction)
@@ -309,7 +325,7 @@ def push_reactions(data, session):
 
         t0 = time.time()
         reaction_data["parsed_participants"] = parse_reaction_participants(
-            reaction_data["participants"], session
+            session, reaction_data["participants"]
         )
 
         # Make sure there are no participants shared between the lhs and rhs
@@ -725,9 +741,9 @@ def push_reactions(data, session):
 
 
 @timing
-def load_reactions(curated_reactions_filepath, session):
+def load_reactions(session: Session, curated_reactions_filepath):
     logging.debug("Loading Curated Reactions reference data")
 
     data = load_bigg_id_data(curated_reactions_filepath)
 
-    push_reactions(data, session)
+    push_reactions(session, data)

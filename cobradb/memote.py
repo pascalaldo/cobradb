@@ -3,6 +3,7 @@ import gzip
 import json
 import cobra
 from sqlalchemy import select
+from cobradb.api import utils
 import memote.suite.api as api
 from memote.suite.results import ResultManager
 
@@ -174,9 +175,10 @@ def load_memote_results(model_bigg_id, filename, session):
     with gzip.open(filename, "rb") as f:
         results = json.load(f)
 
-    model_db = session.scalars(
-        select(Model).filter(Model.bigg_id == model_bigg_id).limit(1)
-    ).first()
+    model_db = utils.get_object_by_bigg_id(session, model_bigg_id, Model)
+    if model_db is None:
+        raise ValueError(f"Model {model_bigg_id} could not be found.")
+    model_db_id = model_db.id
 
     existing_result_db = session.scalars(
         select(MemoteResult).filter(MemoteResult.model == model_db).limit(1)
@@ -219,7 +221,7 @@ def load_memote_results(model_bigg_id, filename, session):
             session.commit()
 
         general_result = {
-            "model_id": model_db.id,
+            "model_id": model_db_id,
             "test_id": test_db.id,
         }
         specific_results = {}
@@ -240,7 +242,7 @@ def load_memote_results(model_bigg_id, filename, session):
                 for k in prop_val:
                     if k not in specific_results:
                         specific_results[k] = {
-                            "model_id": model_db.id,
+                            "model_id": model_db_id,
                             "test_id": test_db.id,
                         }
                     if test_type in ["per_reaction", "count_reaction"]:
@@ -258,7 +260,7 @@ def load_memote_results(model_bigg_id, filename, session):
                             .filter(
                                 (UniversalReaction.bigg_id == universal_reaction_id)
                                 & (ModelReaction.copy_number == copy_number)
-                                & (ModelReaction.model_id == model_db.id)
+                                & (ModelReaction.model_id == model_db_id)
                             )
                             .limit(1)
                         ).first()
@@ -281,7 +283,7 @@ def load_memote_results(model_bigg_id, filename, session):
                                     )
                                     & (
                                         ModelCompartmentalizedComponent.model_id
-                                        == model_db.id
+                                        == model_db_id
                                     )
                                 )
                                 .limit(1)
@@ -302,7 +304,7 @@ def load_memote_results(model_bigg_id, filename, session):
                                     )
                                     & (
                                         ModelCompartmentalizedComponent.model_id
-                                        == model_db.id
+                                        == model_db_id
                                     )
                                 )
                                 .limit(1)
@@ -330,3 +332,4 @@ def load_memote_results(model_bigg_id, filename, session):
             res_db = MemoteResult(**res)
             session.add(res_db)
         session.commit()
+        session.close()

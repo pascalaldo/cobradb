@@ -249,11 +249,11 @@ def main():
         )
 
     if not args.skip_rhea:
-        load_rhea(settings.rhea, session)
+        load_rhea(session, settings.rhea)
     if not args.skip_curated_metabolites:
-        load_bigg_ids(settings.curated_metabolites, session)
+        load_bigg_ids(session, settings.curated_metabolites)
     if not args.skip_curated_reactions:
-        load_reactions(settings.curated_reactions, session)
+        load_reactions(session, settings.curated_reactions)
 
     # load the genome
     genomes_for_models = {}
