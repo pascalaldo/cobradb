@@ -5,7 +5,7 @@
 import datetime
 import math
 from operator import itemgetter
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from cobradb.inchi import (
     inchi_object_to_inchikey,
@@ -103,7 +103,18 @@ class AlreadyLoadedError(Exception):
 
 
 class Base(DeclarativeBase):
-    pass
+    def _to_shallow_dict(self) -> Dict[str, Any]:
+        d = {"_type": type(self).__name__}
+        for k, v in vars(self).items():
+            if k.startswith("_"):
+                continue
+            d[k] = v
+        return d
+
+    @classmethod
+    def _from_dict(cls, d):
+        kwargs = {k: v for k, v in d.items() if not k.startswith("_")}
+        return cls(**kwargs)
 
 
 class BiGGBase:
@@ -851,7 +862,7 @@ class ModelReaction(Base, BiGGBase):
             return f"{model_id}|{universal_reaction_id}:{copy_number}"
 
     def __repr__(self):
-        return "<cobradb ModelCeaction(id={self.id}, reaction_id={self.reaction_id}, model_id={self.model_id}, copy_number={self.copy_number})>".format(
+        return "<cobradb ModelReaction(id={self.id}, reaction_id={self.reaction_id}, model_id={self.model_id}, copy_number={self.copy_number})>".format(
             self=self
         )
 

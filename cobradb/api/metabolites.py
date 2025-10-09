@@ -81,7 +81,7 @@ def _create_component(
     if reference_compound_db is not None:
         charge = reference_compound_db.charge
         formula = reference_compound_db.formula
-        if name is not None:
+        if name is None:
             name = reference_compound_db.name
     try:
         int_charge = int(str(charge))

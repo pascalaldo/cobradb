@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+
+from sqlalchemy import select
+from sqlalchemy.orm import close_all_sessions, subqueryload
+
+from cobradb.api import utils
+from cobradb.models import *
+
+import json
+
+MODELS_CLASS_MAP = {x.__name__: x for x in Base.__subclasses__()}
+
+
+class BiGGrJSONEncoder(json.JSONEncoder):
+    def default(self, o):
+        if o is None:
+            return None
+        if isinstance(o, Base):
+            return o._to_shallow_dict()
+        if isinstance(o, datetime.datetime):
+            return {"_type": "datetime", "iso": o.isoformat()}
+        # Let the base class default method raise the TypeError
+        return super().default(o)
+
+
+def biggr_json_object_hook(o):
+    if o is None:
+        return None
+    if not isinstance(o, dict):
+        return o
+    if "_type" not in o:
+        return o
+    if o["_type"] == "datetime":
+        if isoformat := o.get("iso"):
+            return datetime.datetime.fromisoformat(isoformat)
+        else:
+            return None
+    if o["_type"] in MODELS_CLASS_MAP:
+        model_class = MODELS_CLASS_MAP[o["_type"]]
+        return model_class._from_dict(o)
+
+    return None
+
+
+def main():
+    # make the session
+    session = Session()
+
+    iml1515 = utils.get_object_by_bigg_id(session, "iML1515", Model)
+
+    print(iml1515)
+    print(iml1515._to_shallow_dict())
+    print("------")
+    json_str = json.dumps(iml1515, cls=BiGGrJSONEncoder)
+    print(json_str)
+    iml1515 = json.loads(json_str, object_hook=biggr_json_object_hook)
+    print(iml1515)
+    json_str = json.dumps(iml1515, cls=BiGGrJSONEncoder)
+
+    print(iml1515._to_shallow_dict())
+    iml1515 = session.scalars(
+        select(Model)
+        .options(subqueryload(Model.model_reactions))
+        .filter(Model.bigg_id == "iML1515")
+        .limit(1)
+    ).first()
+
+    print(iml1515)
+    print(iml1515._to_shallow_dict())
+    print("------")
+    json_str = json.dumps(iml1515, cls=BiGGrJSONEncoder)
+    print(json_str)
+    iml1515 = json.loads(json_str, object_hook=biggr_json_object_hook)
+    print(iml1515)
+
+    session.close()
+    close_all_sessions()
+
+
+if __name__ == "__main__":
+    main()
