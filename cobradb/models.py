@@ -33,9 +33,9 @@ from sqlalchemy.orm import mapped_column
 from sqlalchemy.ext.hybrid import hybrid_property
 
 
-def relationship(**kwargs):
+def relationship(*args, **kwargs):
     opts = dict(lazy="raise") | kwargs
-    return relationship(**opts)
+    return orm_relationship(*args, **opts)
 
 
 # Connect to postgres
