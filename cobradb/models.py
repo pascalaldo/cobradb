@@ -25,11 +25,18 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import relationship, sessionmaker
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import relationship as orm_relationship
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.ext.hybrid import hybrid_property
+
+
+def relationship(**kwargs):
+    opts = dict(lazy="raise") | kwargs
+    return relationship(**opts)
+
 
 # Connect to postgres
 engine = create_engine(db_connection_string)
