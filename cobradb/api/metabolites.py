@@ -1,7 +1,7 @@
 from typing import Any, List, Optional, Tuple, Type, TypeVar, Union
 
 from sqlalchemy import select
-from sqlalchemy.orm import Bundle, Session
+from sqlalchemy.orm import Bundle, Session, subqueryload
 
 from cobradb.data_sources import get_data_source_id
 from cobradb.models import (
@@ -222,7 +222,12 @@ def add_chebi_annotations(
 
     chebi_entity: ChebiEntity object to retrieve annotations from."""
     chebi = reference_compound_db.bigg_id
-    annotation_db = utils.get_object_by_bigg_id(session, chebi, Annotation)
+    annotation_db = utils.get_object_by_bigg_id(
+        session,
+        chebi,
+        Annotation,
+        opts=(subqueryload(Annotation.links), subqueryload(Annotation.properties)),
+    )
     if not annotation_db:
         annotation_db = Annotation(
             bigg_id=chebi,

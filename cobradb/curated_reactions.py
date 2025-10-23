@@ -367,6 +367,21 @@ def push_reactions(session: Session, data):
                 UniversalReaction.model_id == reaction_model.id
             )
 
+        is_biomass_reaction = reference_db is None and "BIOMASS" in bigg_id.upper()
+        if is_biomass_reaction and reaction_model is not None:
+            bare_bigg_id = bigg_id.removeprefix(f"__{reaction_model.bigg_id}__")
+            other_universal_reaction_db = session.scalars(
+                select(UniversalReaction)
+                .filter(UniversalReaction.bigg_id == bare_bigg_id)
+                .filter(
+                    (UniversalReaction.model_id != None)
+                    & (UniversalReaction.model_id != reaction_model.id)
+                )
+                .limit(1)
+            ).first()
+            if not other_universal_reaction_db:
+                bigg_id = bare_bigg_id
+
         universal_reaction_db = session.scalars(
             select(UniversalReaction)
             .filter(UniversalReaction.bigg_id == bigg_id)
@@ -384,10 +399,6 @@ def push_reactions(session: Session, data):
         #     logging.warn(f"Universal reaction already exists: {bigg_id}.")
         #     continue
         #
-
-        is_biomass_reaction = reference_db is None and "BIOMASS" in bigg_id.upper()
-        if is_biomass_reaction and reaction_model is not None:
-            bigg_id = bigg_id.removeprefix(f"__{reaction_model.bigg_id}__")
 
         universal_reaction_matrix_info = []
         reaction_matrix_info = []
@@ -623,6 +634,18 @@ def push_reactions(session: Session, data):
                 )
                 # TODO: Probably rename
                 continue
+
+        if universal_reaction_db is None:
+            for i in range(100):
+                proposed_bigg_id = bigg_id if i == 0 else f"{bigg_id}_{i}"
+                universal_reaction_db_by_bigg_id = session.scalars(
+                    select(UniversalReaction)
+                    .filter(UniversalReaction.bigg_id == proposed_bigg_id)
+                    .limit(1)
+                ).first()
+                if universal_reaction_db_by_bigg_id is None:
+                    bigg_id = proposed_bigg_id
+                    break
         if universal_reaction_db is None:
             print("Creating new universal reaction")
             reaction_name = reaction_data.get("name")

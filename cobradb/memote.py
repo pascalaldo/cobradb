@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 import gzip
 import json
+import re
 import cobra
 from sqlalchemy import select
 from cobradb.api import utils
@@ -146,6 +147,10 @@ TEST_TYPES = {
     "test_unconserved_metabolites": {"type": "count_metabolite", "field": "data_count"},
 }
 
+MEMOTE_REACTION_REGEX = re.compile(
+    r"^([0-9\.]+ \<\= )?(?P<rname>[_a-zA-Z0-9\:]+)( \<\= [0-9\.]+)?$"
+)
+
 
 def run_memote(model_filename, result_filename):
     config = cobra.Configuration()
@@ -240,13 +245,20 @@ def load_memote_results(model_bigg_id, filename, session):
                 if prop == "data":
                     general_result["data_count"] = len(prop_val)
                 for k in prop_val:
+                    if not isinstance(k, str):
+                        print(f"Key {k} not a string.")
+                        continue
                     if k not in specific_results:
                         specific_results[k] = {
                             "model_id": model_db_id,
                             "test_id": test_db.id,
                         }
                     if test_type in ["per_reaction", "count_reaction"]:
-                        universal_reaction_id = k
+                        reaction_match = MEMOTE_REACTION_REGEX.match(k)
+                        if not reaction_match:
+                            universal_reaction_id = k
+                        else:
+                            universal_reaction_id = reaction_match.group("rname")
                         copy_number = 1
                         if ":" in universal_reaction_id:
                             universal_reaction_id, copy_number = (
@@ -265,7 +277,7 @@ def load_memote_results(model_bigg_id, filename, session):
                             .limit(1)
                         ).first()
                         if model_reaction_db is None:
-                            print(f"Reaction not found: {k}")
+                            print(f"Reaction not found: {k} ({universal_reaction_id})")
                             continue
                         specific_results[k]["model_reaction_id"] = model_reaction_db.id
                     elif test_type in ["per_metabolite", "count_metabolite"]:

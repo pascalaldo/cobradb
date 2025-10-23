@@ -1,4 +1,4 @@
-from typing import Optional, Type, TypeVar
+from typing import Any, Iterable, Optional, Type, TypeVar
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 import re
@@ -13,11 +13,22 @@ T = TypeVar("T", bound=BiGGBase)
 
 
 def get_object_by_bigg_id(
-    session: Session, bigg_id: str, obj_class: Type[T]
+    session: Session,
+    bigg_id: str,
+    obj_class: Type[T],
+    opts: Optional[Iterable[Any]] = None,
 ) -> Optional[T]:
-    return session.scalars(
-        select(obj_class).filter(obj_class.bigg_id == bigg_id).limit(1)
-    ).first()
+    if opts is None:
+        return session.scalars(
+            select(obj_class).filter(obj_class.bigg_id == bigg_id).limit(1)
+        ).first()
+    else:
+        return session.scalars(
+            select(obj_class)
+            .options(*opts)
+            .filter(obj_class.bigg_id == bigg_id)
+            .limit(1)
+        ).first()
 
 
 def fix_explicit_formula(formula):

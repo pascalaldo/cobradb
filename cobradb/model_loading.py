@@ -403,6 +403,7 @@ def load_metabolites(
 
         if charge is None:
             charge = 0
+            metabolite.charge = 0
 
         new_biggr_id = create_component_bigg_id(new_universal_bigg_id, charge=charge)
 
@@ -510,7 +511,9 @@ def load_metabolites(
                 if model.metabolites.has_id(new_id):
                     other_metabolite = model.metabolites.get_by_id(new_id)
                     if other_metabolite.charge == metabolite.charge:
-                        raise Exception("Two identical metabolites.")
+                        raise Exception(
+                            f"Two identical metabolites: {new_id} (charge {metabolite.charge})."
+                        )
                     other_metabolite.id = create_component_bigg_id(
                         other_metabolite.id, charge=other_metabolite.charge
                     )

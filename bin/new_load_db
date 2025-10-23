@@ -163,6 +163,9 @@ def main():
                     "DROP TABLE IF EXISTS model, model_reaction, model_compartmentalized_component, model_gene, memote_result, model_count, publication_model CASCADE;"
                 )
             )
+            conn.execute(text("DELETE FROM reaction WHERE model_id IS NOT NULL;"))
+            conn.execute(text("DELETE FROM reaction WHERE model_id IS NOT NULL;"))
+
         timings["drop_models"] = time.time() - f_start_time
 
     f_start_time = time.time()
@@ -264,8 +267,8 @@ def main():
 
         n = len(assemblies)
         for i, (assembly_id, assembly_path) in enumerate(assemblies.items()):
-            if assembly_id != "GCF_000005845.2":
-                continue
+            # if assembly_id != "GCF_000005845.2":
+            #     continue
 
             logging.info(f"Loading assembly {assembly_id} ({i+1} of {n})")
             try:
@@ -285,10 +288,10 @@ def main():
         n = len(models_list)
         model_dir = Path(settings.model_directory)
         for i, model_dict in enumerate(models_list):
-            if model_dict["model_filename"] not in [
-                "iML1515.json",
-            ]:
-                continue
+            # if model_dict["model_filename"] not in [
+            #     "iML1515.json",
+            # ]:
+            #     continue
             print(model_dict)
             logging.info(
                 "Loading model ({} of {}) {}".format(
@@ -325,7 +328,8 @@ def main():
 
                 successful_memote_run = False
                 try:
-                    run_memote(model_biggr_filename, memote_result_filename)
+                    if not Path(memote_result_filename).exists():
+                        run_memote(model_biggr_filename, memote_result_filename)
                     successful_memote_run = True
                 except Exception as e:
                     logging.error("Memote failed to run.")

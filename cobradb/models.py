@@ -15,9 +15,8 @@ from cobradb.inchi import (
 from cobradb.settings import db_connection_string
 
 from sqlalchemy import (
-    ForeignKey,
+    ForeignKey as SQLAlchemyForeignKey,
     String,
-    Boolean,
     create_engine,
     MetaData,
     Enum,
@@ -25,16 +24,24 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.orm import relationship as orm_relationship
-from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.orm import Mapped
-from sqlalchemy.orm import mapped_column
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    relationship as orm_relationship,
+    sessionmaker,
+)
 from sqlalchemy.ext.hybrid import hybrid_property
 
 
+def ForeignKey(*args, **kwargs):
+    opts = dict(onupdate="CASCADE", ondelete="CASCADE") | kwargs
+    return SQLAlchemyForeignKey(*args, **opts)
+
+
 def relationship(*args, **kwargs):
-    opts = dict(lazy="raise") | kwargs
+    # opts = dict(lazy="raise") | kwargs
+    opts = dict(cascade="all, delete") | kwargs
     return orm_relationship(*args, **opts)
 
 
@@ -633,9 +640,7 @@ class Synonym(Base):
     synonym: Mapped[str]
     type = mapped_column(custom_enums["synonym_type"])
 
-    data_source_id: Mapped[int] = mapped_column(
-        ForeignKey("data_source.id", ondelete="CASCADE")
-    )
+    data_source_id: Mapped[int] = mapped_column(ForeignKey("data_source.id"))
     data_source: Mapped[DataSource] = relationship(back_populates="synonyms")
 
     __table_args__ = (UniqueConstraint("ome_id", "synonym", "type", "data_source_id"),)
@@ -665,13 +670,11 @@ class Publication(Base):
 class PublicationModel(Base):
     __tablename__ = "publication_model"
 
-    model_id: Mapped[int] = mapped_column(
-        ForeignKey("model.id", ondelete="CASCADE"), primary_key=True
-    )
+    model_id: Mapped[int] = mapped_column(ForeignKey("model.id"), primary_key=True)
     model: Mapped["Model"] = relationship(back_populates="publication_models")
 
     publication_id: Mapped[int] = mapped_column(
-        ForeignKey("publication.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("publication.id"), primary_key=True
     )
     publication: Mapped["Publication"] = relationship(
         back_populates="publication_models"
@@ -686,7 +689,7 @@ class OldIDSynonym(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     type = mapped_column(custom_enums["old_id_synonym_type"])
     synonym_id: Mapped[int] = mapped_column(
-        ForeignKey("synonym.id", ondelete="CASCADE"),
+        ForeignKey("synonym.id"),
     )
     ome_id: Mapped[int]
 
@@ -753,9 +756,7 @@ class Model(Base, BiGGBase):
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
-    genome_id: Mapped[int] = mapped_column(
-        ForeignKey("genome.id", onupdate="CASCADE", ondelete="CASCADE")
-    )
+    genome_id: Mapped[int] = mapped_column(ForeignKey("genome.id"))
     genome: Mapped[Genome] = relationship(back_populates="models")
 
     organism: Mapped[Optional[str]]
@@ -803,12 +804,12 @@ class ModelGene(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     model_id: Mapped[int] = mapped_column(
-        ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model.id"),
     )
     model: Mapped["Model"] = relationship(back_populates="model_genes")
 
     gene_id: Mapped[int] = mapped_column(
-        ForeignKey("gene.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("gene.id"),
     )
     gene: Mapped["Gene"] = relationship(back_populates="model_genes")
 
@@ -829,12 +830,12 @@ class ModelReaction(Base, BiGGBase):
     bigg_id: Mapped[str]
 
     reaction_id: Mapped[int] = mapped_column(
-        ForeignKey("reaction.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("reaction.id"),
     )
     reaction: Mapped["Reaction"] = relationship(back_populates="model_reactions")
 
     model_id: Mapped[int] = mapped_column(
-        ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model.id"),
     )
     model: Mapped["Model"] = relationship(back_populates="model_reactions")
 
@@ -846,7 +847,7 @@ class ModelReaction(Base, BiGGBase):
 
     gene_reaction_rule: Mapped[str]
     original_gene_reaction_rule: Mapped[Optional[str]]
-    subsystem: Mapped[str]
+    subsystem: Mapped[Optional[str]]
 
     reaction_matrix: Mapped[List["GeneReactionMatrix"]] = relationship(
         back_populates="model_reaction"
@@ -888,12 +889,12 @@ class GeneReactionMatrix(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     model_gene_id: Mapped[int] = mapped_column(
-        ForeignKey("model_gene.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model_gene.id"),
     )
     model_gene: Mapped[ModelGene] = relationship(back_populates="reaction_matrix")
 
     model_reaction_id: Mapped[int] = mapped_column(
-        ForeignKey("model_reaction.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model_reaction.id"),
     )
     model_reaction: Mapped[ModelReaction] = relationship(
         back_populates="reaction_matrix"
@@ -913,14 +914,14 @@ class UniversalCompartmentalizedComponent(Base, BiGGBase):
     bigg_id: Mapped[str]
 
     universal_component_id: Mapped[int] = mapped_column(
-        ForeignKey(UniversalComponent.id, onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey(UniversalComponent.id),
     )
     universal_component: Mapped[UniversalComponent] = relationship(
         back_populates="universal_compartmentalized_components"
     )
 
     compartment_id: Mapped[int] = mapped_column(
-        ForeignKey("compartment.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("compartment.id"),
     )
     compartment: Mapped["Compartment"] = relationship(
         back_populates="universal_compartmentalized_components"
@@ -943,14 +944,14 @@ class CompartmentalizedComponent(Base, BiGGBase):
     bigg_id: Mapped[str]
 
     component_id: Mapped[int] = mapped_column(
-        ForeignKey("component.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("component.id"),
     )
     component: Mapped[Component] = relationship(
         back_populates="compartmentalized_components"
     )
 
     compartment_id: Mapped[int] = mapped_column(
-        ForeignKey("compartment.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("compartment.id"),
     )
     compartment: Mapped["Compartment"] = relationship(
         back_populates="compartmentalized_components"
@@ -983,7 +984,7 @@ class ModelCompartmentalizedComponent(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     model_id: Mapped[int] = mapped_column(
-        ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model.id"),
     )
     model: Mapped["Model"] = relationship(
         back_populates="model_compartmentalized_components"
@@ -1062,7 +1063,7 @@ class ModelCount(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     model_id: Mapped[int] = mapped_column(
-        ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model.id"),
     )
     model: Mapped["Model"] = relationship(back_populates="model_count")
 
@@ -1075,7 +1076,7 @@ class Gene(GenomeRegion):
     __tablename__ = "gene"
 
     id: Mapped[int] = mapped_column(
-        ForeignKey("genome_region.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("genome_region.id"),
         primary_key=True,
     )
     name: Mapped[Optional[str]]
@@ -1262,7 +1263,6 @@ class UniversalReaction(Base, BiGGBase):
     bigg_id: Mapped[str]
 
     hash: Mapped[str]
-    # type = Column(String(20))
     name: Mapped[Optional[str]]
 
     model_id: Mapped[Optional[int]] = mapped_column(ForeignKey(Model.id))
@@ -1276,8 +1276,6 @@ class UniversalReaction(Base, BiGGBase):
     reference: Mapped[Optional[ReferenceReaction]] = relationship(
         back_populates="universal_reactions"
     )
-    # reaction_hash = Column(String, nullable=False)
-    # pseudoreaction = Column(Boolean, default=False)
     reactions: Mapped[List["Reaction"]] = relationship(
         back_populates="universal_reaction"
     )
@@ -1446,11 +1444,7 @@ class UniversalReactionMatrix(Base):
     )
 
     universal_compartmentalized_component_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            UniversalCompartmentalizedComponent.id,
-            onupdate="CASCADE",
-            ondelete="CASCADE",
-        ),
+        ForeignKey(UniversalCompartmentalizedComponent.id),
     )
     universal_compartmentalized_component: Mapped[
         UniversalCompartmentalizedComponent
@@ -1484,9 +1478,7 @@ class ReactionMatrix(Base):
     )
 
     compartmentalized_component_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            CompartmentalizedComponent.id, onupdate="CASCADE", ondelete="CASCADE"
-        ),
+        ForeignKey(CompartmentalizedComponent.id),
     )
     compartmentalized_component: Mapped[CompartmentalizedComponent] = relationship(
         back_populates="matrix"
