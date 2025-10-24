@@ -31,7 +31,7 @@ def get_object_by_bigg_id(
         ).first()
 
 
-def fix_explicit_formula(formula):
+def fix_explicit_formula(formula, allow_R=False) -> Tuple[bool, Optional[str]]:
     if not isinstance(formula, str):
         return False, None
     m = FORMULA_PATTERN.fullmatch(formula)
@@ -43,7 +43,7 @@ def fix_explicit_formula(formula):
     for m in FORMULA_PATTERN_SINGLE.finditer(formula):
         atom = m[1]
         mult = m[2]
-        if atom == "R":
+        if atom == "R" and not allow_R:
             return False, None
         if mult is not None and int(mult) == "1":
             new_formula = new_formula + atom

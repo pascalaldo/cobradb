@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from cobra.io import save_json_model, save_yaml_model, write_sbml_model
+from sqlalchemy.orm import contains_eager, joinedload
 from cobradb.api.bigg_ids import create_component_bigg_id
 from cobradb.api.metabolites import (
     create_model_specific_metabolite,
@@ -31,6 +32,7 @@ from cobradb.models import (
     ReferenceReaction,
     Synonym,
     UniversalCompartmentalizedComponent,
+    UniversalComponent,
     UniversalReaction,
 )
 from cobradb import settings
@@ -191,7 +193,7 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
     else:
         logging.warning("No compartment names file")
         compartment_names = {}
-    final_metabolite_ids = load_metabolites(
+    load_metabolites(
         session,
         model_db_id,
         model,
@@ -200,30 +202,20 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
     )
 
     # # reactions
-    model_db_rxn_ids = load_reactions(
+    load_reactions(
         session,
         model_db_id,
         model,
-        old_parsed_ids["reactions"],
-        final_metabolite_ids,
     )
     #
     # genes
     model_db_rxn_ids = {}
-    load_genes(session, model_db_id, model, model_db_rxn_ids, old_parsed_ids["genes"])
+    load_genes(session, model_db_id, model)
 
     # count model objects for the model summary web page
     load_model_count(session, model_db_id)
 
     session.commit()
-
-    # TODO: Some potential of security issues here. Not a problem as long as the inputs are controlled by maintainers.
-    model_output_path = Path("/models/models/") / model_bigg_id
-    logging.warning(f"Writing corrected model to: {model_output_path}")
-    for gz in ["", ".gz"]:
-        write_sbml_model(model, model_output_path.with_suffix(f".biggr.sbml{gz}"))
-        save_json_model(model, model_output_path.with_suffix(f".biggr.json{gz}"))
-        save_yaml_model(model, model_output_path.with_suffix(f".biggr.yaml{gz}"))
 
     return model_bigg_id, model_db_id
 
@@ -325,27 +317,32 @@ def load_metabolites(
 
     # for each metabolite in the model
     for metabolite in model.metabolites:
-        model_specific_id = metabolite.id
-        metabolite_id = model_specific_id.removeprefix(f"__{model_db.bigg_id}__")
-        metabolite_id = parse.remove_duplicate_tag(metabolite_id)
-        print(f"Metabolite: {model_specific_id} -> {metabolite_id}")
+        # model_specific_id = metabolite.id
+        # metabolite_id = model_specific_id.removeprefix(f"__{model_db.bigg_id}__")
+        # metabolite_id = parse.remove_duplicate_tag(metabolite_id)
+        # print(f"Metabolite: {model_specific_id} -> {metabolite_id}")
+        metabolite_id = metabolite.id
+        clean_metabolite_id = parse.remove_duplicate_tag(metabolite_id)
+        print(f"Metabolite: {metabolite_id}")
 
         try:
             component_bigg_id, compartment_bigg_id = parse.split_compartment(
-                metabolite_id
+                clean_metabolite_id
             )
         except Exception:
             logging.error(
                 (
                     "Could not find compartment for metabolite %s in"
-                    "model %s" % (metabolite_id, model_db.bigg_id)
+                    "model %s, assuming compartment 'c'."
+                    % (clean_metabolite_id, model_db.bigg_id)
                 )
             )
-            continue
+            component_bigg_id = clean_metabolite_id
+            compartment_bigg_id = "c"
 
         if (
             universal_component_db := get_universal_component_by_bigg_id(
-                session, component_bigg_id
+                session, component_bigg_id, model_id=model_db.id
             )
         ) is not None:
             new_universal_bigg_id = universal_component_db.bigg_id
@@ -370,16 +367,16 @@ def load_metabolites(
             ignore_empty_str(strip_str_or_none(formula_fn(metabolite)))
             for formula_fn in formula_fns
         )
-        # Get the first non-null result. Otherwise _formula = None.
-        _formula = format_formula(next(filter(None, values), None))
+        # Get the first non-null result. Otherwise formula = None.
+        formula = format_formula(next(filter(None, values), None))
         # Check for non-valid formulas
-        if parse.invalid_formula(_formula):
+        if parse.invalid_formula(formula):
             logging.warning(
                 "Invalid formula %s for metabolite %s in model %s"
-                % (_formula, metabolite_id, model.id)
+                % (formula, metabolite_id, model.id)
             )
-            _formula = None
-        _is_orig, _formula = utils.fix_explicit_formula(_formula)
+            formula = None
+        _is_orig, formula = utils.fix_explicit_formula(formula, allow_R=True)
 
         # get charge
         try:
@@ -403,26 +400,29 @@ def load_metabolites(
 
         if charge is None:
             charge = 0
-            metabolite.charge = 0
 
         new_biggr_id = create_component_bigg_id(new_universal_bigg_id, charge=charge)
 
         print(f"% {new_biggr_id}")
-
         if (
-            metabolite_db := utils.get_object_by_bigg_id(
-                session, new_biggr_id, Component
-            )
+            metabolite_db := session.scalars(
+                select(Component)
+                .filter(Component.bigg_id == new_biggr_id)
+                .filter(
+                    (Component.model_id == None) | (Component.model_id == model_db.id)
+                )
+                .limit(1)
+            ).first()
         ) is not None:
             charge_zero = 0 if charge is None else charge
             if (
                 metabolite_db.charge != charge_zero
                 or not utils.are_explicit_formulae_equivalent(
-                    metabolite_db.formula, _formula
+                    metabolite_db.formula, formula
                 )
             ):
                 logging.warning(
-                    f"Found component, but charge or formula did not match: {metabolite_db} (charge: {metabolite_db.charge}, formula: {metabolite_db.formula}) != (charge: {charge}, formula: {_formula})"
+                    f"Found component, but charge or formula did not match: {metabolite_db} (charge: {metabolite_db.charge}, formula: {metabolite_db.formula}) != (charge: {charge}, formula: {formula})"
                 )
                 metabolite_db = None
 
@@ -430,20 +430,21 @@ def load_metabolites(
         if metabolite_db is None:
             print("Creating a model-specific metabolite entry.")
             # make the new metabolite
+            name = scrub_name(getattr(metabolite, "name", None))
+            if name is None:
+                name = ""
             universal_component_db, metabolite_db = create_model_specific_metabolite(
                 bigg_id=new_universal_bigg_id,
                 model_db=model_db,
                 charge=charge,
-                formula=_formula,
-                name="",
+                formula=formula,
+                name=name,
                 session=session,
             )
 
         print(f"%% <> {metabolite_db} ({universal_component_db})")
         if metabolite_db is None or universal_component_db is None:
             raise ValueError("Error parsing metabolites")
-
-        final_metabolite_ids[metabolite_id] = metabolite_db.bigg_id
 
         compartment_db = utils.get_object_by_bigg_id(
             session, compartment_bigg_id, Compartment
@@ -488,58 +489,127 @@ def load_metabolites(
             )
             session.add(comp_component_db)
 
-        # if there is no model compartmentalized component, add a new one
+        # Check if there is an existing entry that exactly matches
         model_comp_comp_db = session.scalars(
             select(ModelCompartmentalizedComponent)
-            .filter(
-                ModelCompartmentalizedComponent.compartmentalized_component
-                == comp_component_db
-            )
             .filter(ModelCompartmentalizedComponent.model == model_db)
+            .filter(
+                ModelCompartmentalizedComponent.id_in_original_model == metabolite_id
+            )
             .limit(1)
         ).first()
         if model_comp_comp_db is None:
-            model_comp_comp_db = ModelCompartmentalizedComponent(
-                model=model_db,
-                compartmentalized_component=comp_component_db,
-            )
-            session.add(model_comp_comp_db)
-
-        if universal_comp_component_db is not None:
-            new_id = universal_comp_component_db.bigg_id
-            if new_id != metabolite.id:
-                if model.metabolites.has_id(new_id):
-                    other_metabolite = model.metabolites.get_by_id(new_id)
-                    if other_metabolite.charge == metabolite.charge:
-                        raise Exception(
-                            f"Two identical metabolites: {new_id} (charge {metabolite.charge})."
-                        )
-                    other_metabolite.id = create_component_bigg_id(
-                        other_metabolite.id, charge=other_metabolite.charge
+            model_comp_comp_db_all = session.scalars(
+                select(ModelCompartmentalizedComponent)
+                .options(
+                    contains_eager(
+                        ModelCompartmentalizedComponent.compartmentalized_component
+                    ).options(
+                        contains_eager(
+                            CompartmentalizedComponent.universal_compartmentalized_component
+                        ),
+                        joinedload(CompartmentalizedComponent.component).joinedload(
+                            Component.universal_component
+                        ),
                     )
-                    metabolite.id = comp_component_db.bigg_id
-                else:
-                    metabolite.id = new_id
-        if comp_component_db is not None and metabolite_db is not None:
-            metabolite.annotation["biggr"] = comp_component_db.bigg_id
-            metabolite.annotation["sbo"] = "SBO:0000247"
-
-            comp_ref_map = session.scalars(
-                select(ComponentReferenceMapping)
-                .join(ComponentReferenceMapping.reference_compound)
-                .filter(ComponentReferenceMapping.component == metabolite_db)
+                )
+                .join(ModelCompartmentalizedComponent.compartmentalized_component)
+                .join(CompartmentalizedComponent.universal_compartmentalized_component)
+                .filter(
+                    CompartmentalizedComponent.universal_compartmentalized_component
+                    == universal_comp_component_db
+                )
+                .filter(ModelCompartmentalizedComponent.model == model_db)
             ).all()
-            if comp_ref_map:
-                chebis = []
-                for crm in comp_ref_map:
-                    if crm.reference_compound.bigg_id.startswith("CHEBI:"):
-                        chebis.append(crm.reference_compound.bigg_id)
-                    metabolite.annotation["sbo"] = crm.reference_compound.get_sbo()
+            mcc_duplicates = 0
+            for mcc_db in model_comp_comp_db_all:
+                if not ":" in mcc_db.bigg_id:
+                    mcc_db.bigg_id = create_component_bigg_id(
+                        mcc_db.compartmentalized_component.component.universal_component.bigg_id,
+                        compartment_bigg_id=compartment_db.bigg_id,
+                        charge=mcc_db.compartmentalized_component.component.charge,
+                    )
+                if mcc_db.compartmentalized_component == comp_component_db:
+                    mcc_duplicates += 1
+            if mcc_duplicates == 0:
+                model_comp_comp_id = create_component_bigg_id(
+                    universal_component_db.bigg_id,
+                    compartment_bigg_id=compartment_db.bigg_id,
+                    charge=metabolite_db.charge,
+                )
+                model_comp_comp_db = ModelCompartmentalizedComponent(
+                    bigg_id=model_comp_comp_id,
+                    model=model_db,
+                    compartmentalized_component=comp_component_db,
+                    id_in_original_model=metabolite_id,
+                )
+                session.add(model_comp_comp_db)
+            else:
+                print(
+                    "Duplicate metabolite in model, creating a model-specific metabolite entry."
+                )
+                base_universal_bigg_id = new_universal_bigg_id
+                new_universal_bigg_id = f"{base_universal_bigg_id}_DUP1"
+                for i in range(1, 100):
+                    new_universal_bigg_id = f"{base_universal_bigg_id}_DUP{i}"
+                    new_bigg_id = create_component_bigg_id(
+                        new_universal_bigg_id,
+                        charge=charge,
+                        model_bigg_id=model_db.bigg_id,
+                    )
+                    temp_comp_db = utils.get_object_by_bigg_id(
+                        session, new_bigg_id, Component
+                    )
+                    if temp_comp_db is None:
+                        break
 
-                if chebis:
-                    metabolite.annotation["chebi"] = chebis
-
-    return final_metabolite_ids
+                # make the new metabolite
+                universal_component_db, metabolite_db = (
+                    create_model_specific_metabolite(
+                        bigg_id=new_universal_bigg_id,
+                        model_db=model_db,
+                        charge=charge,
+                        formula=_formula,
+                        name="",
+                        session=session,
+                    )
+                )
+                if universal_component_db is None or metabolite_db is None:
+                    raise ValueError()
+                model_comp_comp_id = create_component_bigg_id(
+                    universal_component_db.bigg_id,
+                    compartment_bigg_id=compartment_db.bigg_id,
+                    charge=metabolite_db.charge,
+                )
+                comp_comp_id = create_component_bigg_id(
+                    universal_component_db.bigg_id,
+                    compartment_bigg_id=compartment_db.bigg_id,
+                    charge=metabolite_db.charge,
+                )
+                universal_comp_comp_id = create_component_bigg_id(
+                    universal_component_db.bigg_id,
+                    compartment_bigg_id=compartment_db.bigg_id,
+                )
+                universal_comp_component_db = UniversalCompartmentalizedComponent(
+                    bigg_id=universal_comp_comp_id,
+                    universal_component=universal_component_db,
+                    compartment=compartment_db,
+                )
+                session.add(universal_comp_component_db)
+                comp_component_db = CompartmentalizedComponent(
+                    bigg_id=comp_comp_id,
+                    component=metabolite_db,
+                    universal_compartmentalized_component=universal_comp_component_db,
+                    compartment=compartment_db,
+                )
+                session.add(comp_component_db)
+                model_comp_comp_db = ModelCompartmentalizedComponent(
+                    bigg_id=model_comp_comp_id,
+                    model=model_db,
+                    compartmentalized_component=comp_component_db,
+                    id_in_original_model=metabolite_id,
+                )
+                session.add(model_comp_comp_db)
 
 
 def compartmentalized_id_to_universal_compartmentalized_id(comp_comp_id):
@@ -555,8 +625,6 @@ def load_reactions(
     session,
     model_db_id,
     model,
-    old_reaction_ids,
-    final_metabolite_ids,
 ):
     """Load the reactions and stoichiometries into the model.
 
@@ -596,26 +664,54 @@ def load_reactions(
     model_db_rxn_ids = {}
     for reaction in model.reactions:
         # Drop duplicates label
-        model_specific_id = reaction.id
-        reaction_id = model_specific_id.removeprefix(f"__{model_db.bigg_id}__")
-        reaction_id = parse.remove_duplicate_tag(reaction_id)
-        reaction_id, model_reaction_copy_number = parse.split_id_and_copy_tag(
-            reaction_id
+        # model_specific_id = reaction.id
+        # reaction_id = model_specific_id.removeprefix(f"__{model_db.bigg_id}__")
+        # reaction_id = parse.remove_duplicate_tag(reaction_id)
+        reaction_id = reaction.id
+        clean_reaction_id = parse.remove_duplicate_tag(reaction_id)
+        clean_reaction_id, model_reaction_copy_number = parse.split_id_and_copy_tag(
+            clean_reaction_id
         )
         # TODO: Make sure to keep copy number equal model and biggr
 
         # if reaction_id != "EX_glc__D_e" and reaction_id != "EX___iML1515__glc__D_e":
         #     continue
 
+        met_mappings = {
+            m.id: (
+                session.scalars(
+                    select(ModelCompartmentalizedComponent)
+                    .options(
+                        joinedload(
+                            ModelCompartmentalizedComponent.compartmentalized_component
+                        ).joinedload(
+                            CompartmentalizedComponent.universal_compartmentalized_component
+                        )
+                    )
+                    .filter(
+                        (ModelCompartmentalizedComponent.model == model_db)
+                        & (
+                            ModelCompartmentalizedComponent.id_in_original_model == m.id
+                        ),
+                    )
+                    .limit(1)
+                ).first()
+            )
+            for m in reaction.metabolites.keys()
+        }
+        if any(x is None for x in met_mappings.values()):
+            raise ValueError()
+
         participants = [
             dict(
-                compartmentalized_component_bigg_id=(
-                    m.id if ":" in m.id else f"{m.id}:{int(m.charge)}"
-                ),
+                compartmentalized_component=met_mappings[
+                    m.id
+                ].compartmentalized_component,
                 coefficient=coeff,
             )
             for m, coeff in reaction.metabolites.items()
         ]
+        # print(f"{reaction_id}: {participants}")
         reaction_hash = Reaction.generate_hash(participants)
         # print(f"reaction hash 0: {reaction_hash}")
 
@@ -681,9 +777,9 @@ def load_reactions(
             # universal_participants = [v for v in universal_participants_d.values() if v["coefficient"] != 0]
             universal_participants = [
                 dict(
-                    universal_compartmentalized_component_bigg_id=compartmentalized_id_to_universal_compartmentalized_id(
+                    universal_compartmentalized_component=met_mappings[
                         m.id
-                    ),
+                    ].compartmentalized_component.universal_compartmentalized_component,
                     coefficient=coeff,
                 )
                 for m, coeff in reaction.metabolites.items()
@@ -707,12 +803,12 @@ def load_reactions(
                         "name": reaction.name,
                         "participants": [
                             [
-                                (abs(coeff), x["compartmentalized_component_bigg_id"])
+                                (abs(coeff), x["compartmentalized_component"].bigg_id)
                                 for x in participants
                                 if (coeff := float(x["coefficient"])) < 0
                             ],
                             [
-                                (abs(coeff), x["compartmentalized_component_bigg_id"])
+                                (abs(coeff), x["compartmentalized_component"].bigg_id)
                                 for x in participants
                                 if (coeff := float(x["coefficient"])) >= 0
                             ],
@@ -741,15 +837,15 @@ def load_reactions(
                 ):
                     universal_compartmentalized_component_bigg_id = (
                         universal_participants[0][
-                            "universal_compartmentalized_component_bigg_id"
-                        ]
+                            "universal_compartmentalized_component"
+                        ].bigg_id
                     )
                     if (
-                        reaction_id
+                        clean_reaction_id
                         != f"EX_{universal_compartmentalized_component_bigg_id}"
                     ):
-                        print(f"Wrong name for exchange reaction: {reaction_id}")
-                        reaction_id = (
+                        print(f"Wrong name for exchange reaction: {clean_reaction_id}")
+                        clean_reaction_id = (
                             f"EX_{universal_compartmentalized_component_bigg_id}"
                         )
                     is_exchange = True
@@ -757,22 +853,22 @@ def load_reactions(
                 reaction_model_bigg_id = None
                 if not is_exchange:
                     print("! Creating model-specific reaction.")
-                    reaction_id = model_specific_id
+                    clean_reaction_id = f"__{model_db.bigg_id}__{clean_reaction_id}"
                     reaction_model_bigg_id = model_db.bigg_id
                 else:
                     print("! Creating exchange reaction.")
 
                 reaction_data = {
-                    reaction_id: {
+                    clean_reaction_id: {
                         "name": reaction.name,
                         "participants": [
                             [
-                                (abs(coeff), x["compartmentalized_component_bigg_id"])
+                                (abs(coeff), x["compartmentalized_component"].bigg_id)
                                 for x in participants
                                 if (coeff := float(x["coefficient"])) < 0
                             ],
                             [
-                                (abs(coeff), x["compartmentalized_component_bigg_id"])
+                                (abs(coeff), x["compartmentalized_component"].bigg_id)
                                 for x in participants
                                 if (coeff := float(x["coefficient"])) >= 0
                             ],
@@ -795,7 +891,7 @@ def load_reactions(
         if reaction_db is None:
             print("ERROR: Reaction was not correctly created.")
 
-        logging.warn(f"Reaction {reaction_id}: {reaction_db}")
+        logging.warn(f"Reaction {clean_reaction_id}: {reaction_db}")
 
         reaction_matrix_db = session.scalars(
             select(ReactionMatrix)
@@ -815,7 +911,7 @@ def load_reactions(
                         model_reaction_is_reversed = True
                     else:
                         logging.error(
-                            f"Coefficients do not match for {reaction_id}, {comp_comp_id}"
+                            f"Coefficients do not match for {clean_reaction_id}, {comp_comp_id}"
                         )
             break
 
@@ -848,29 +944,12 @@ def load_reactions(
             + 1
         )
 
-        reaction.id = (
-            reaction_db.universal_reaction.bigg_id
-            if copy_number == 1
-            else f"{reaction_db.universal_reaction.bigg_id}:{copy_number}"
-        )
-
-        uni_ref_db = session.execute(
-            select(UniversalReaction, ReferenceReaction)
-            .outerjoin(
-                ReferenceReaction,
-                UniversalReaction.reference_id == ReferenceReaction.id,
-            )
-            .filter(UniversalReaction.id == reaction_db.universal_reaction_id)
-            .limit(1)
-        ).first()
-        reaction.annotation["sbo"] = "SBO:0000176"
-        if uni_ref_db is not None:
-            universal_db, reference_db = uni_ref_db
-            reaction.annotation["sbo"] = universal_db.get_sbo(reference_db)
-            if reference_db is not None:
-                if reference_db.bigg_id.startswith("RHEA:"):
-                    reaction.annotation["rhea"] = reference_db.bigg_id
-
+        # reaction.id = (
+        #     reaction_db.universal_reaction.bigg_id
+        #     if copy_number == 1
+        #     else f"{reaction_db.universal_reaction.bigg_id}:{copy_number}"
+        # )
+        #
         # make a new reaction
         model_reaction_id = ModelReaction.create_id(
             model_db.bigg_id, reaction_db.universal_reaction.bigg_id, copy_number
@@ -886,6 +965,7 @@ def load_reactions(
             objective_coefficient=reaction.objective_coefficient,
             copy_number=copy_number,
             subsystem=subsystem,
+            id_in_original_model=reaction_id,
         )
         session.add(model_reaction_db)
         session.commit()
@@ -1002,7 +1082,7 @@ def _replace_gene_str(rule, old_gene, new_gene):
 
 
 @timing
-def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
+def load_genes(session, model_db_id, model):
     """Load the genes for this model.
 
     Arguments:
@@ -1021,8 +1101,6 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
     genes.
 
     """
-    # only grab this once
-    data_source_id = get_or_create_data_source(session, "old_bigg_id")
 
     # find the model in the db
     model_db = session.get(Model, model_db_id)
@@ -1044,23 +1122,29 @@ def load_genes(session, model_db_id, model, model_db_rxn_ids, old_gene_ids):
         # the model
         # if reaction.id not in model_db_rxn_ids:
         #     continue
-        universal_reaction_id, copy_number = ModelReaction.interpret_id(reaction.id)
+        # universal_reaction_id, copy_number = ModelReaction.interpret_id(reaction.id)
+        # model_reaction_db = session.scalars(
+        #     select(ModelReaction)
+        #     .join(ModelReaction.reaction)
+        #     .join(Reaction.universal_reaction)
+        #     .filter(
+        #         (UniversalReaction.bigg_id == universal_reaction_id)
+        #         & (ModelReaction.copy_number == copy_number)
+        #         & (ModelReaction.model == model_db)
+        #     )
+        #     .limit(1)
+        # ).first()
         model_reaction_db = session.scalars(
             select(ModelReaction)
-            .join(ModelReaction.reaction)
-            .join(Reaction.universal_reaction)
-            .filter(
-                (UniversalReaction.bigg_id == universal_reaction_id)
-                & (ModelReaction.copy_number == copy_number)
-                & (ModelReaction.model == model_db)
-            )
+            .filter(ModelReaction.model == model_db)
+            .filter(ModelReaction.id_in_original_model == reaction.id)
             .limit(1)
         ).first()
 
         if model_reaction_db is None:
             logging.error(
-                "Could not find ModelReaction {} for {} in model {}. Cannot load GeneReactionMatrix entries".format(
-                    model_db_rxn_ids[reaction.id], reaction.id, model.id
+                "Could not find ModelReaction {} in model {}. Cannot load GeneReactionMatrix entries".format(
+                    reaction.id, model_db.bigg_id
                 )
             )
             continue

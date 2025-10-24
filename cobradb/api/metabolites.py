@@ -38,8 +38,7 @@ CHEBI_METABOLITE_PROPERTIES = {
 
 
 def get_universal_component_by_bigg_id(
-    session: Session,
-    universal_bigg_id: str,
+    session: Session, universal_bigg_id: str, model_id: Optional[int] = None
 ) -> Optional[UniversalComponent]:
     """Get the univeral component object from a universal BiGG ID. This
     function maps deprecated IDs to the correct new BiGG IDs.
@@ -59,9 +58,16 @@ def get_universal_component_by_bigg_id(
         .limit(1)
     ).first()
     if universal_component_db is None:
+        if model_id is None:
+            model_sel = UniversalComponent.model_id == None
+        else:
+            model_sel = (UniversalComponent.model_id == None) | (
+                UniversalComponent.model_id == model_id
+            )
         universal_component_db = session.scalars(
             select(UniversalComponent)
             .filter(UniversalComponent.bigg_id == universal_bigg_id)
+            .filter(model_sel)
             .limit(1)
         ).first()
     return universal_component_db

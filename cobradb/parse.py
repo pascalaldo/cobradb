@@ -103,14 +103,22 @@ def remove_boundary_metabolites(model):
     as the metabolites are deleted.
 
     """
-    for metabolite_id in [str(x) for x in model.metabolites]:
+    boundary_metabolite_ids = [
+        mid for x in model.metabolites if (mid := x.id).endswith("_b")
+    ]
+    for metabolite_id in boundary_metabolite_ids:
         metabolite = model.metabolites.get_by_id(metabolite_id)
-        if not metabolite.id.endswith("_b"):
-            continue
+
+        remove_metabolite = False
         for reaction in list(metabolite._reaction):
             if reaction.id.startswith("EX_"):
-                metabolite.remove_from_model()
-                break
+                remove_metabolite = True
+                if len(reaction.metabolites) == 1:
+                    reaction.remove_from_model()
+
+        if remove_metabolite:
+            print(f"Removing metabolite {metabolite_id} from model {model.id}.")
+            metabolite.remove_from_model()
     model.metabolites._generate_index()
 
 
@@ -367,9 +375,9 @@ def convert_ids(model):
                 while new_id in model.metabolites:
                     new_id = increment_id(new_id)
             metabolite.id = new_id
-    for metabolite in model.metabolites:
-        # Create temporary, model-specific identifiers
-        metabolite.id = f"__{model.id}__{metabolite.id}"
+    # for metabolite in model.metabolites:
+    #     # Create temporary, model-specific identifiers
+    #     metabolite.id = f"__{model.id}__{metabolite.id}"
     model.metabolites._generate_index()
 
     # take out the _b metabolites
@@ -408,9 +416,9 @@ def convert_ids(model):
         reaction.gene_reaction_rule = _check_rule_prefs(
             rule_prefs, reaction.gene_reaction_rule
         )
-    for reaction in model.reactions:
-        # Create temporary, model-specific identifiers
-        reaction.id = f"__{model.id}__{reaction.id}"
+    # for reaction in model.reactions:
+    #     # Create temporary, model-specific identifiers
+    #     reaction.id = f"__{model.id}__{reaction.id}"
     model.reactions._generate_index()
 
     # update the genes

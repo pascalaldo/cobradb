@@ -245,6 +245,8 @@ def load_memote_results(model_bigg_id, filename, session):
                 if prop == "data":
                     general_result["data_count"] = len(prop_val)
                 for k in prop_val:
+                    if isinstance(k, list) and len(k) == 1:
+                        k = k[0]
                     if not isinstance(k, str):
                         print(f"Key {k} not a string.")
                         continue
@@ -259,19 +261,17 @@ def load_memote_results(model_bigg_id, filename, session):
                             universal_reaction_id = k
                         else:
                             universal_reaction_id = reaction_match.group("rname")
-                        copy_number = 1
-                        if ":" in universal_reaction_id:
-                            universal_reaction_id, copy_number = (
-                                universal_reaction_id.rsplit(":", maxsplit=1)
-                            )
-                            copy_number = int(copy_number)
+                        # copy_number = 1
+                        # if ":" in universal_reaction_id:
+                        #     universal_reaction_id, copy_number = (
+                        #         universal_reaction_id.rsplit(":", maxsplit=1)
+                        #     )
+                        #     copy_number = int(copy_number)
                         model_reaction_db = session.scalars(
                             select(ModelReaction)
-                            .join(ModelReaction.reaction)
                             .join(Reaction.universal_reaction)
                             .filter(
-                                (UniversalReaction.bigg_id == universal_reaction_id)
-                                & (ModelReaction.copy_number == copy_number)
+                                (ModelReaction.bigg_id == universal_reaction_id)
                                 & (ModelReaction.model_id == model_db_id)
                             )
                             .limit(1)

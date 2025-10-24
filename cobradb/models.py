@@ -828,6 +828,7 @@ class ModelReaction(Base, BiGGBase):
     __tablename__ = "model_reaction"
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
+    id_in_original_model: Mapped[str]
 
     reaction_id: Mapped[int] = mapped_column(
         ForeignKey("reaction.id"),
@@ -859,15 +860,16 @@ class ModelReaction(Base, BiGGBase):
 
     __table_args__ = (
         UniqueConstraint("reaction_id", "model_id", "copy_number"),
-        UniqueConstraint("bigg_id"),
+        UniqueConstraint("model_id", "bigg_id"),
+        UniqueConstraint("model_id", "id_in_original_model"),
     )
 
     @staticmethod
     def create_id(model_id, universal_reaction_id, copy_number):
         if copy_number == 1:
-            return f"{model_id}|{universal_reaction_id}"
+            return f"{universal_reaction_id}"
         else:
-            return f"{model_id}|{universal_reaction_id}:{copy_number}"
+            return f"{universal_reaction_id}:{copy_number}"
 
     def __repr__(self):
         return "<cobradb ModelReaction(id={self.id}, reaction_id={self.reaction_id}, model_id={self.model_id}, copy_number={self.copy_number})>".format(
@@ -978,10 +980,14 @@ class CompartmentalizedComponent(Base, BiGGBase):
     )
 
 
-class ModelCompartmentalizedComponent(Base):
+class ModelCompartmentalizedComponent(
+    Base
+):  # Not BiGGBase, since BiGG IDs are not unique across models
     __tablename__ = "model_compartmentalized_component"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    bigg_id: Mapped[str]
+    id_in_original_model: Mapped[str]
 
     model_id: Mapped[int] = mapped_column(
         ForeignKey("model.id"),
