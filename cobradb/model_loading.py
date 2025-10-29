@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from sqlalchemy.orm import contains_eager, joinedload
+from sqlalchemy.orm import Session, contains_eager, joinedload
 from cobradb.api.bigg_ids import create_component_bigg_id
 from cobradb.api.metabolites import (
     create_model_specific_metabolite,

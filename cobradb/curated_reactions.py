@@ -3,7 +3,11 @@ from sqlalchemy.orm import Session, contains_eager
 from cobradb.api import metabolites
 from cobradb.api import reactions
 from cobradb.api.bigg_ids import create_component_bigg_id
-from cobradb.api.reactions import ReactionParticipantInfo
+from cobradb.api.reactions import (
+    ReactionParticipantInfo,
+    is_reaction_charge_balanced,
+    is_reaction_mass_balanced,
+)
 from cobradb.api.utils import get_object_by_bigg_id
 from cobradb.models import (
     Compartment,
@@ -132,6 +136,14 @@ def push_reactions(session: Session, data):
             model_cond = lambda x: (x.model_id == None) | (
                 x.model_id == reaction_model_id
             )
+
+        if not (charge_balanced := is_reaction_charge_balanced(reaction_participants)):
+            logging.error(f"Reaction {bigg_id} is not charge balanced.")
+            continue
+
+        if not (mass_balanced := is_reaction_mass_balanced(reaction_participants)):
+            logging.error(f"Reaction {bigg_id} is not mass balanced.")
+            continue
 
         reaction_hash = Reaction.generate_hash(reaction_participants)
 

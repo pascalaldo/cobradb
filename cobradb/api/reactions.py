@@ -102,6 +102,32 @@ class ReferenceReactionParticipantInfo:
         return self.universal_reaction_participant_info.compartment_id
 
 
+def is_reaction_charge_balanced(
+    reaction_participants: List[ReactionParticipantInfo],
+) -> bool:
+    overall_charge = 0
+    for reaction_participant in reaction_participants:
+        overall_charge += reaction_participant.coefficient * reaction_participant.charge
+    return overall_charge == 0
+
+
+def is_reaction_mass_balanced(
+    reaction_participants: List[ReactionParticipantInfo],
+) -> bool:
+    overall_counts = {}
+    for reaction_participant in reaction_participants:
+        d_formula = utils.formula_to_dict(
+            reaction_participant.compartmentalized_component.component.formula
+        )
+        for k, v in d_formula.items():
+            n = v * reaction_participant.coefficient
+            if k in overall_counts:
+                overall_counts[k] += n
+            else:
+                overall_counts[k] = n
+    return all(x == 0 for x in overall_counts.values())
+
+
 def _get_compartment_charge_dict(
     participants: Union[
         List[ReactionParticipantInfo], List[UniversalReactionParticipantInfo]

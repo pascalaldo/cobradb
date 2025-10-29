@@ -53,7 +53,7 @@ def fix_explicit_formula(formula, allow_R=False) -> Tuple[bool, Optional[str]]:
     return is_original_formula, new_formula
 
 
-def _formula_to_dict(formula):
+def formula_to_dict(formula):
     d = {}
     for m in FORMULA_PATTERN_SINGLE.finditer(formula):
         atom = m[1]
@@ -68,6 +68,6 @@ def _formula_to_dict(formula):
 def are_explicit_formulae_equivalent(formula1, formula2):
     if formula1 is None or formula2 is None:
         return False
-    d1 = _formula_to_dict(formula1)
-    d2 = _formula_to_dict(formula2)
+    d1 = formula_to_dict(formula1)
+    d2 = formula_to_dict(formula2)
     return d1 == d2

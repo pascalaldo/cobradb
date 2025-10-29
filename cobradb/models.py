@@ -1317,8 +1317,10 @@ class UniversalReaction(Base, BiGGBase):
                 _model, bare_id = bare_id.split("__", maxsplit=1)
             else:
                 bare_id = str(self.id)
-        if bare_id.startswith("EX_"):
+        if self.is_exchange:
             return "SBO:0000627"
+        if self.is_transport:
+            return "SBO:0000655"
         if bare_id.startswith("SK_"):
             return "SBO:0000632"
         if bare_id.startswith("DM_"):
