@@ -321,9 +321,18 @@ class UniversalComponent(Base, BiGGBase):
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
+    default_component_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("component.id")
+    )
+    default_component: Mapped[Optional["Component"]] = relationship(
+        foreign_keys=[default_component_id],
+        post_update=True,
+    )
+
     name: Mapped[Optional[str]]
     components: Mapped[List["Component"]] = relationship(
-        back_populates="universal_component"
+        back_populates="universal_component",
+        foreign_keys="Component.universal_component_id",
     )
     reference_mapping: Mapped["UniversalComponentReferenceMapping"] = relationship(
         back_populates="universal_component"
@@ -358,7 +367,8 @@ class Component(Base, BiGGBase):
         ForeignKey(UniversalComponent.id)
     )
     universal_component: Mapped[UniversalComponent] = relationship(
-        back_populates="components"
+        back_populates="components",
+        foreign_keys=[universal_component_id],
     )
 
     name: Mapped[Optional[str]]
@@ -756,6 +766,8 @@ class Model(Base, BiGGBase):
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
+    base_filename: Mapped[Optional[str]]
+
     genome_id: Mapped[int] = mapped_column(ForeignKey("genome.id"))
     genome: Mapped[Genome] = relationship(back_populates="models")
 
@@ -793,7 +805,7 @@ class Model(Base, BiGGBase):
     escher_maps: Mapped[List["EscherMap"]] = relationship(back_populates="model")
     memote_results: Mapped[List["MemoteResult"]] = relationship(back_populates="model")
 
-    __table_args__ = (UniqueConstraint("bigg_id"),)
+    __table_args__ = (UniqueConstraint("bigg_id"), UniqueConstraint("base_filename"))
 
     def __repr__(self):
         return "<cobradb Model(id={self.id}, bigg_id={self.bigg_id})>".format(self=self)
@@ -834,6 +846,7 @@ class ModelReaction(Base, BiGGBase):
         ForeignKey("reaction.id"),
     )
     reaction: Mapped["Reaction"] = relationship(back_populates="model_reactions")
+    reversed: Mapped[bool] = mapped_column(default=False)
 
     model_id: Mapped[int] = mapped_column(
         ForeignKey("model.id"),
@@ -1193,9 +1206,9 @@ class ReferenceReaction(Base, BiGGBase):
                     rc_id = rc.bigg_id
                 coefficient = str(p["coefficient"]).lower()
             else:
-                rc_id = p.compound.bigg_id
-                coefficient = p.coefficient
-            if "n" in coefficient:
+                rc_id = p.reference_compound.bigg_id
+                coefficient = p.universal_reaction_participant_info.coefficient
+            if isinstance(coefficient, str) and "n" in coefficient:
                 coefficient = math.inf
             else:
                 try:
@@ -1271,6 +1284,10 @@ class UniversalReaction(Base, BiGGBase):
     hash: Mapped[str]
     name: Mapped[Optional[str]]
 
+    is_exchange: Mapped[bool] = mapped_column(default=False)
+    is_transport: Mapped[bool] = mapped_column(default=False)
+    is_pseudo: Mapped[bool] = mapped_column(default=False)
+
     model_id: Mapped[Optional[int]] = mapped_column(ForeignKey(Model.id))
     model: Mapped[Optional["Model"]] = relationship(
         back_populates="model_namespace_universal_reactions"
@@ -1319,12 +1336,17 @@ class UniversalReaction(Base, BiGGBase):
     def generate_hash(components):
         comp_dict = {}
         for c in components:
-            cc = c.get("universal_compartmentalized_component")
-            if cc is None:
-                cc_id = c["universal_compartmentalized_component_bigg_id"]
+            if isinstance(c, dict):
+                cc = c.get("universal_compartmentalized_component")
+                if cc is None:
+                    cc_id = c["universal_compartmentalized_component_bigg_id"]
+                else:
+                    cc_id = cc.bigg_id
+                coeff = c["coefficient"]
             else:
-                cc_id = cc.bigg_id
-            comp_dict[cc_id] = comp_dict.get(cc_id, 0) + c["coefficient"]
+                cc_id = c.universal_compartmentalized_component.bigg_id
+                coeff = c.coefficient
+            comp_dict[cc_id] = comp_dict.get(cc_id, 0) + coeff
             # if comp_dict[cc_id] == 0:
             #     del comp_dict[cc_id]
         sorting_1 = sorted(comp_dict.items(), key=lambda x: (x[0], abs(x[1])))
@@ -1405,12 +1427,17 @@ class Reaction(Base, BiGGBase):
     def generate_hash(components):
         comp_dict = {}
         for c in components:
-            cc = c.get("compartmentalized_component")
-            if cc is None:
-                cc_id = c["compartmentalized_component_bigg_id"]
+            if isinstance(c, dict):
+                cc = c.get("compartmentalized_component")
+                if cc is None:
+                    cc_id = c["compartmentalized_component_bigg_id"]
+                else:
+                    cc_id = cc.bigg_id
+                coeff = c["coefficient"]
             else:
-                cc_id = cc.bigg_id
-            comp_dict[cc_id] = comp_dict.get(cc_id, 0) + c["coefficient"]
+                cc_id = c.compartmentalized_component.bigg_id
+                coeff = c.coefficient
+            comp_dict[cc_id] = comp_dict.get(cc_id, 0) + coeff
             # if comp_dict[cc_id] == 0:
             #     del comp_dict[cc_id]
         sorting_1 = sorted(comp_dict.items(), key=lambda x: (x[0], abs(x[1])))
@@ -1437,13 +1464,15 @@ class UniversalReactionMatrix(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    universal_reaction_id: Mapped[int] = mapped_column(ForeignKey(UniversalReaction.id))
-    universal_reaction: Mapped[UniversalReaction] = relationship(
+    universal_reaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey(UniversalReaction.id), default=None
+    )
+    universal_reaction: Mapped[Optional[UniversalReaction]] = relationship(
         back_populates="matrix"
     )
 
     reference_reaction_participant_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey(ReferenceReactionParticipant.id)
+        ForeignKey(ReferenceReactionParticipant.id), default=None
     )
     reference_reaction_participant: Mapped[Optional[ReferenceReactionParticipant]] = (
         relationship(back_populates="universal_reaction_matrix")
@@ -1462,9 +1491,9 @@ class UniversalReactionMatrix(Base):
         back_populates="universal_reaction_matrix"
     )
     __table_args__ = (
-        UniqueConstraint(
-            "universal_reaction_id", "universal_compartmentalized_component_id"
-        ),
+        # UniqueConstraint(
+        #     "universal_reaction_id", "universal_compartmentalized_component_id"
+        # ),
     )
 
 

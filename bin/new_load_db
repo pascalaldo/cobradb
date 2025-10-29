@@ -255,6 +255,10 @@ def main():
             }
         )
 
+    if not args.skip_compartments:
+        load_compartments(settings.compartment_names, session)
+        session.commit()
+
     if not args.skip_rhea:
         load_rhea(session, settings.rhea)
     if not args.skip_curated_metabolites:
@@ -324,10 +328,6 @@ def main():
 
         timings["load_models"] = time.time() - f_start_time
 
-    if not args.skip_compartments:
-        load_compartments(settings.compartment_names, session)
-        session.commit()
-
     modelseed_db = None
     if not args.skip_seed_metabolites:
         modelseed_dir = "/chebi"
@@ -362,10 +362,8 @@ def main():
             model_bigg_id = None
             try:
                 model_bigg_id, _model_db_id = process_model(
-                    model_dir / model_dict["model_filename"],
-                    model_dict["pub_ref"],
-                    model_dict["genome_ref"],
                     session,
+                    model_dir / model_dict["model_filename"],
                 )
             except Exception as e:
                 print(

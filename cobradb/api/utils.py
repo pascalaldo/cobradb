@@ -1,4 +1,4 @@
-from typing import Any, Iterable, Optional, Type, TypeVar
+from typing import Any, Iterable, Optional, Tuple, Type, TypeVar
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 import re

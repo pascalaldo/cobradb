@@ -9,6 +9,7 @@ from cobradb.models import (
     AnnotationLink,
     AnnotationProperty,
     BiGGBase,
+    Compartment,
     Component,
     ComponentIDMapping,
     ComponentReferenceMapping,
@@ -18,6 +19,7 @@ from cobradb.models import (
     ReferenceCompoundAnnotationMapping,
     ReferenceReactivePart,
     ReferenceReactivePartMatrix,
+    UniversalCompartmentalizedComponent,
     UniversalComponent,
     UniversalComponentReferenceMapping,
 )
@@ -119,11 +121,13 @@ def _create_universal_component(
     bigg_id: str,
     name: Optional[str] = None,
     model_db: Optional[Model] = None,
+    default_component: Optional[Component] = None,
 ):
     universal_component_db = UniversalComponent(
         bigg_id=bigg_id,
         name=name,
         model=model_db,
+        default_component=default_component,
     )
     session.add(universal_component_db)
     return universal_component_db
@@ -388,7 +392,7 @@ def create_metabolite(
             }
 
     all_chebis = get_related_chebis(input_chebi)
-    all_chebis = list(all_chebis.keys())
+    all_chebis = list({input_chebi} | set(all_chebis.keys()))
 
     component_ref_mapping_db = session.execute(
         select(
@@ -429,7 +433,7 @@ def create_metabolite(
             }
 
     default_chebi = None
-    for ch in [input_chebi] + all_chebis:
+    for ch in all_chebis:
         default_chebi = DEFAULT_CHEBI_MAPPING.get(ch)
         if default_chebi is not None:
             break
@@ -450,7 +454,9 @@ def create_metabolite(
 
     full_bids_created = {}
     for chebi, reference_db in references_db.items():
-        full_bid = f"{proposed_bigg_id}:{reference_db.charge}"
+        full_bid = bigg_ids_api.create_component_bigg_id(
+            proposed_bigg_id, charge=reference_db.charge
+        )
         if full_bid not in full_bids_created:
             if (
                 component_db := _create_component(
@@ -484,8 +490,10 @@ def create_metabolite(
                 )
                 session.add(universal_component_ref_mapping_db)
 
-        session.commit()
+            universal_component_db.default_component = component_db
+
         successfully_added.append((full_bid, reference_db.bigg_id))
+        session.commit()
 
     if not full_bids_created:
         session.commit()
@@ -540,6 +548,8 @@ def create_model_specific_metabolite(
             model_db=model_db,
             require_formula=False,
         )
+        if universal_component_db.default_component is None:
+            universal_component_db.default_component = component_db
     return universal_component_db, component_db
 
 
@@ -573,3 +583,30 @@ def create_component_id_mapping(
     )
     session.add(id_mapping_db)
     return id_mapping_db
+
+
+def get_or_create_universal_compartmentalized_component(
+    session: Session,
+    universal_component_db: UniversalComponent,
+    compartment_db: Compartment,
+) -> UniversalCompartmentalizedComponent:
+    universal_compartmentalized_component_db = session.scalars(
+        select(UniversalCompartmentalizedComponent)
+        .filter(UniversalCompartmentalizedComponent.compartment_id == compartment_db.id)
+        .filter(
+            UniversalCompartmentalizedComponent.universal_component
+            == universal_component_db
+        )
+    ).first()
+    if universal_compartmentalized_component_db is None:
+        ucc_bigg_id = bigg_ids_api.create_component_bigg_id(
+            base_bigg_id=universal_component_db.bigg_id,
+            compartment_bigg_id=compartment_db.bigg_id,
+        )
+        universal_compartmentalized_component_db = UniversalCompartmentalizedComponent(
+            bigg_id=ucc_bigg_id,
+            universal_component=universal_component_db,
+            compartment=compartment_db,
+        )
+        session.add(universal_compartmentalized_component_db)
+    return universal_compartmentalized_component_db

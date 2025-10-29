@@ -1,18 +1,630 @@
-from typing import Dict, List, Optional, Tuple
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from copy import deepcopy
+import logging
+from operator import itemgetter
+from typing import Any, Dict, List, Optional, Tuple, Union
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, contains_eager, joinedload, subqueryload
 
 from cobradb.data_sources import get_data_source_id
 from cobradb.models import (
     Annotation,
     AnnotationLink,
     Compartment,
+    CompartmentalizedComponent,
+    Component,
+    ComponentReferenceMapping,
+    Model,
+    Reaction,
+    ReactionMatrix,
     ReferenceCompound,
     ReferenceReaction,
     ReferenceReactionAnnotationMapping,
     ReferenceReactionParticipant,
+    UniversalCompartmentalizedComponent,
+    UniversalComponent,
+    UniversalReaction,
+    UniversalReactionMatrix,
 )
 from cobradb.api import utils
+
+COMP_IN_OUT = [
+    ("c", "p"),
+    ("c", "e"),
+    ("p", "e"),
+    ("n", "c"),
+    ("n", "p"),
+    ("n", "e"),
+]
+
+
+class ReactionParticipantInfo:
+    def __init__(
+        self,
+        coefficient: Union[float, int],
+        compartmentalized_component: CompartmentalizedComponent,
+    ):
+        self.coefficient = coefficient
+        self.compartmentalized_component = compartmentalized_component
+
+    @property
+    def compartment_id(self) -> int:
+        return self.compartmentalized_component.compartment_id
+
+    @property
+    def charge(self):
+        return self.compartmentalized_component.component.charge
+
+
+class UniversalReactionParticipantInfo:
+    def __init__(
+        self,
+        coefficient: Union[float, int],
+        universal_compartmentalized_component: UniversalCompartmentalizedComponent,
+    ):
+        self.coefficient = coefficient
+        self.universal_compartmentalized_component = (
+            universal_compartmentalized_component
+        )
+
+    @property
+    def compartment_id(self) -> int:
+        return self.universal_compartmentalized_component.compartment_id
+
+    @property
+    def charge(self):
+        if (
+            self.universal_compartmentalized_component.universal_component.default_component
+            is None
+        ):
+            return 0
+        return (
+            self.universal_compartmentalized_component.universal_component.default_component.charge
+        )
+
+
+class ReferenceReactionParticipantInfo:
+    def __init__(
+        self,
+        reference_compound: ReferenceCompound,
+        universal_reaction_participant_info: UniversalReactionParticipantInfo,
+        reference_reaction_participant: Optional[ReferenceReactionParticipant] = None,
+    ):
+        self.reference_compound = reference_compound
+        self.universal_reaction_participant_info = universal_reaction_participant_info
+        self.reference_reaction_participant = reference_reaction_participant
+
+    @property
+    def side(self):
+        return "L" if self.universal_reaction_participant_info.coefficient < 0 else "R"
+
+    @property
+    def compartment_id(self) -> int:
+        return self.universal_reaction_participant_info.compartment_id
+
+
+def _get_compartment_charge_dict(
+    participants: Union[
+        List[ReactionParticipantInfo], List[UniversalReactionParticipantInfo]
+    ],
+) -> Dict[int, int]:
+    participants_charge = {}
+    for p in participants:
+        compartment_id = p.compartment_id
+        if compartment_id not in participants_charge:
+            participants_charge[compartment_id] = 0
+        participants_charge[compartment_id] += p.charge * p.coefficient
+    return participants_charge
+
+
+def _corrected_charge_diffs(charge_dict_1, charge_dict_2):
+    charge_diffs = {
+        c: int(charge_dict_1[c] - charge_dict_2[c])
+        for c in (set(charge_dict_1.keys()) | set(charge_dict_2.keys()))
+    }
+
+    if (total_charge_diff := sum(charge_diffs.values())) == 0:
+        return None
+
+    # Add hydrons in compartments with the biggest difference first.
+    corr_charge_diffs = {}
+    remaining_charge_diff = total_charge_diff
+    for c, charge_diff in reversed(sorted(charge_diffs.items(), key=itemgetter(1))):
+        if charge_diff == 0:
+            continue
+        if (charge_diff > 0) != (total_charge_diff > 0):
+            continue
+        if abs(charge_diff) < abs(remaining_charge_diff):
+            corr_charge_diffs[c] = charge_diff
+            remaining_charge_diff -= charge_diff
+        else:
+            corr_charge_diffs[c] = remaining_charge_diff
+            remaining_charge_diff = 0
+        if remaining_charge_diff == 0:
+            break
+    return corr_charge_diffs
+
+
+def get_universal_reaction_participants_list(
+    session: Session,
+    reaction_participants: List[ReactionParticipantInfo],
+) -> List[UniversalReactionParticipantInfo]:
+    universal_participants = [
+        UniversalReactionParticipantInfo(
+            universal_compartmentalized_component=participant.compartmentalized_component.universal_compartmentalized_component,
+            coefficient=participant.coefficient,
+        )
+        for participant in reaction_participants
+    ]
+
+    # Find the difference in charge and correct this using H+.
+    participants_charge = _get_compartment_charge_dict(reaction_participants)
+    universal_participants_charge = _get_compartment_charge_dict(universal_participants)
+
+    corr_charge_diffs = _corrected_charge_diffs(
+        participants_charge, universal_participants_charge
+    )
+    if corr_charge_diffs is None:
+        return universal_participants
+
+    universal_participants_copy = universal_participants[:]
+    for compartment_id, charge_diff in corr_charge_diffs.items():
+        if charge_diff == 0:
+            continue
+        for p in universal_participants:
+            # Update existing entry if possible
+            ucp = p.universal_compartmentalized_component
+            if (
+                ucp.compartment_id == compartment_id
+                and ucp.universal_component.bigg_id == "h"
+            ):
+                p.coefficient += charge_diff
+                break
+        else:
+            # Create a new H+ entry
+            hydron_db = session.scalars(
+                select(UniversalCompartmentalizedComponent)
+                .join(UniversalCompartmentalizedComponent.universal_component)
+                .filter(
+                    UniversalCompartmentalizedComponent.compartment_id == compartment_id
+                )
+                .filter(UniversalComponent.bigg_id == "h")
+                .limit(1)
+            ).first()
+            if not hydron_db:
+                universal_participants = universal_participants_copy
+                break
+            universal_participants.append(
+                UniversalReactionParticipantInfo(
+                    universal_compartmentalized_component=hydron_db,
+                    coefficient=charge_diff,
+                )
+            )
+    # Remove any entries with coefficient 0
+    universal_participants = [p for p in universal_participants if p.coefficient != 0]
+    return universal_participants
+
+
+def get_reference_reaction_participants_list(
+    session: Session,
+    universal_reaction_participants: List[UniversalReactionParticipantInfo],
+) -> Optional[List[ReferenceReactionParticipantInfo]]:
+
+    reference_reaction_participants = []
+    for universal_participant in universal_reaction_participants:
+        universal_component_db = (
+            universal_participant.universal_compartmentalized_component.universal_component
+        )
+        if universal_component_db.reference_mapping is None:
+            return None
+
+        reference_reaction_participants.append(
+            ReferenceReactionParticipantInfo(
+                reference_compound=universal_component_db.reference_mapping.mapping.reference_compound,
+                universal_reaction_participant_info=universal_participant,
+            )
+        )
+    return reference_reaction_participants
+
+
+def match_reference_reaction_participants_with_reference_reaction(
+    session: Session,
+    reference_reaction_participants: List[ReferenceReactionParticipantInfo],
+    reference_reaction_db: ReferenceReaction,
+):
+    reaction_mappings = [({}, {}, reference_reaction_participants[:], [])]
+    participants_query = select(
+        ReferenceReactionParticipant,
+    ).filter(ReferenceReactionParticipant.reaction_id == reference_reaction_db.id)
+
+    if (
+        len(reference_reaction_participants)
+        != session.execute(
+            select(func.count()).select_from(participants_query.subquery())
+        ).scalar_one()
+    ):
+        return None
+    participants_db = session.scalars(participants_query)
+
+    for participant in participants_db:
+        requires_n = "n" in str(participant.coefficient).lower()
+
+        # print(f"Participant: {participant} -> {compound}")
+        crmappings_db = session.scalars(
+            select(ComponentReferenceMapping)
+            .join(
+                ComponentReferenceMapping.universal_component,
+            )
+            .join(ComponentReferenceMapping.component)
+            .filter(
+                ComponentReferenceMapping.reference_compound_id
+                == participant.compound_id,
+            )
+        ).all()
+        participant_mappings = []
+        for crmapping in crmappings_db:
+            coefficient = participant.coefficient
+            if requires_n:
+                if crmapping.reference_n is None:
+                    continue
+                coefficient = coefficient.lower().replace(
+                    "n", str(crmapping.reference_n)
+                )
+            coefficient = float(coefficient)
+
+            ms = [
+                p
+                for p in reference_reaction_participants
+                if p.universal_reaction_participant_info.universal_compartmentalized_component.universal_component_id
+                == crmapping.universal_component_id
+                and float(abs(p.universal_reaction_participant_info.coefficient))
+                == coefficient
+                and (
+                    float(p.universal_reaction_participant_info.charge)
+                    == crmapping.component.charge
+                )
+            ]
+            if not ms:
+                continue
+            for m in ms:
+                participant_mappings.append((participant, m, crmapping))
+        if not participant_mappings:
+            reaction_mappings = []
+            break
+        old_front = reaction_mappings
+        reaction_mappings = []
+        for front in old_front:
+            for (
+                participant_db,
+                reference_reaction_participant,
+                crmapping,
+            ) in participant_mappings:
+                if reference_reaction_participant not in front[2]:
+                    continue
+                new_item = (dict(front[0]), dict(front[1]), front[2][:], front[3][:])
+                for i, att in enumerate(
+                    [("side", "side"), ("compartment", "compartment_id")]
+                ):
+                    if new_item is None:
+                        break
+                    att_m = getattr(participant_db, att[0])
+                    att_r = getattr(reference_reaction_participant, att[1])
+                    if att_m in front[i]:
+                        if att_r != front[i][att_m]:
+                            print(
+                                f"Inconsistent {att} mapping: prev: {att_m}:{front[i][att_m]}, new: {att_m}:{att_r}"
+                            )
+                            new_item = None
+                    elif att_r in front[i].values():
+                        print(
+                            f"Inconsistent {att} mapping: value:{att_r} already in {front[i]}"
+                        )
+                        new_item = None
+                    else:
+                        new_item[i][att_m] = att_r
+                if new_item is not None:
+                    new_item[3].append(
+                        (
+                            participant_db,
+                            reference_reaction_participant,
+                            crmapping,
+                        )
+                    )
+                    new_item[2].remove(reference_reaction_participant)
+                    reaction_mappings.append(new_item)
+    successful_mappings = []
+    for m in reaction_mappings:
+        # TODO: reference_n should also be consistent
+        if m[2]:
+            continue
+        if "in" in m[1] and "out" in m[1]:
+            if not (m[1]["in"], m[1]["out"]) in COMP_IN_OUT:
+                print(
+                    f"mapping in: {m[1]['in']}, out: {m[1]['out']} not a known in/out pair."
+                )
+                continue
+        successful_mappings.append(m)
+    if not successful_mappings:
+        print(f"No successful mappings: {reaction_mappings}")
+        return None
+    elif len(successful_mappings) > 1:
+        print(f"Multiple successful mappings: {reaction_mappings}")
+        return None
+    else:
+        result = []
+        for (
+            participant_db,
+            reference_reaction_participant,
+            crmapping,
+        ) in successful_mappings[0][3]:
+            reference_reaction_participant.reference_reaction_participant = (
+                participant_db
+            )
+            result.append(reference_reaction_participant)
+        return result
+
+
+def find_reference_reaction(
+    session: Session,
+    reference_reaction_participants: List[ReferenceReactionParticipantInfo],
+):
+    reference_db, mapping = None, None
+
+    hash_pattern = ReferenceReaction.generate_hash(
+        reference_reaction_participants, pattern=True
+    )
+
+    db_entries = session.scalars(
+        select(ReferenceReaction).where(
+            ReferenceReaction.hash.regexp_match(hash_pattern)
+        )
+    ).all()
+
+    if not db_entries:
+        return None, None
+    db_entries = list(db_entries)
+    # print(db_entries)
+
+    for db_entry in db_entries:
+        # print(f"Matching {db_entry.id}: {db_entry.equation}")
+        m = match_reference_reaction_participants_with_reference_reaction(
+            session, reference_reaction_participants, db_entry
+        )
+        # print(m)
+        if m is not None:
+            reference_db, mapping = db_entry, m
+            break
+
+    return reference_db, mapping
+
+
+def get_or_create_universal_reaction(
+    session: Session,
+    bigg_id: str,
+    universal_reaction_participants: List[UniversalReactionParticipantInfo],
+    reaction_model_id: Optional[int] = None,
+    exchange_reaction: bool = False,
+    reaction_name: Optional[str] = None,
+) -> UniversalReaction:
+    universal_reaction_hash = UniversalReaction.generate_hash(
+        universal_reaction_participants
+    )
+
+    universal_reaction_db = session.scalars(
+        select(UniversalReaction)
+        .filter(UniversalReaction.hash == universal_reaction_hash)
+        .filter(
+            (UniversalReaction.model_id == None)
+            | (UniversalReaction.model_id == reaction_model_id)
+        )
+        .limit(1)
+    ).first()
+    if universal_reaction_db is not None:
+        return universal_reaction_db
+
+    reference_db = None
+    reference_reaction_participants = get_reference_reaction_participants_list(
+        session, universal_reaction_participants
+    )
+    if reference_reaction_participants is not None:
+        reference_db, reference_reaction_participants = find_reference_reaction(
+            session, reference_reaction_participants
+        )
+
+    if reaction_model_id is None:
+        reaction_model = None
+    else:
+        reaction_model = session.get(Model, reaction_model_id)
+
+    is_biomass_reaction = reference_db is None and "BIOMASS" in bigg_id.upper()
+    if is_biomass_reaction and reaction_model is not None:
+        bare_bigg_id = bigg_id.removeprefix(f"__{reaction_model.bigg_id}__")
+        other_universal_reaction_db = session.scalars(
+            select(UniversalReaction)
+            .filter(UniversalReaction.bigg_id == bare_bigg_id)
+            .filter(
+                (UniversalReaction.model_id != None)
+                & (UniversalReaction.model_id != reaction_model.id)
+            )
+            .limit(1)
+        ).first()
+        if not other_universal_reaction_db:
+            bigg_id = bare_bigg_id
+        biomass_reference_db = session.scalars(
+            select(ReferenceReaction)
+            .filter(ReferenceReaction.bigg_id == "BiGGr:BIOMASS")
+            .limit(1)
+        ).first()
+        if biomass_reference_db is None:
+            biomass_reference_db = ReferenceReaction(
+                bigg_id="BiGGr:BIOMASS",
+                name="Biomass reaction",
+                hash="#BIOMASS",
+            )
+            session.add(biomass_reference_db)
+        reference_db = biomass_reference_db
+
+    for i in range(100):
+        proposed_bigg_id = bigg_id if i == 0 else f"{bigg_id}_{i}"
+        universal_reaction_db_by_bigg_id = session.scalars(
+            select(UniversalReaction)
+            .filter(UniversalReaction.bigg_id == proposed_bigg_id)
+            .limit(1)
+        ).first()
+        if universal_reaction_db_by_bigg_id is None:
+            bigg_id = proposed_bigg_id
+            break
+
+    print("Creating new universal reaction")
+    if reference_db is not None:
+        if reference_db.name is not None and reference_db.name.strip() != "":
+            reaction_name = reference_db.name
+    universal_reaction_db = UniversalReaction(
+        bigg_id=bigg_id,
+        name=reaction_name,
+        reference=reference_db,
+        hash=universal_reaction_hash,
+        model=reaction_model,
+        is_exchange=exchange_reaction,
+        is_pseudo=is_biomass_reaction,
+    )
+
+    compartment_ids = set()
+    if reference_reaction_participants is None:
+        for participant in universal_reaction_participants:
+            ucc = participant.universal_compartmentalized_component
+            compartment_ids.add(ucc.compartment_id)
+            urm_db = UniversalReactionMatrix(
+                universal_compartmentalized_component=ucc,
+                reference_reaction_participant=None,
+                coefficient=participant.coefficient,
+            )
+            universal_reaction_db.matrix.append(urm_db)
+    else:
+        for participant in reference_reaction_participants:
+            ucc = (
+                participant.universal_reaction_participant_info.universal_compartmentalized_component
+            )
+            compartment_ids.add(ucc.compartment_id)
+            urm_db = UniversalReactionMatrix(
+                universal_compartmentalized_component=ucc,
+                reference_reaction_participant=participant.reference_reaction_participant,
+                coefficient=participant.universal_reaction_participant_info.coefficient,
+            )
+            universal_reaction_db.matrix.append(urm_db)
+    if len(compartment_ids) > 1:
+        universal_reaction_db.is_transport = True
+    session.add(universal_reaction_db)
+    return universal_reaction_db
+
+
+def get_or_create_reaction_for_universal_reaction(
+    session: Session,
+    universal_reaction_db: UniversalReaction,
+    reaction_participants: List[ReactionParticipantInfo],
+) -> Optional[Reaction]:
+    reaction_hash = Reaction.generate_hash(reaction_participants)
+
+    # Get the reaction
+    reaction_db = session.scalars(
+        select(Reaction)
+        .filter(
+            (Reaction.hash == reaction_hash)
+            & (
+                (Reaction.model_id == None)
+                | (Reaction.model == universal_reaction_db.model)
+            )
+        )
+        .limit(1)
+    ).first()
+    if reaction_db is not None:
+        logging.warning(f"Reaction '{reaction_hash}' already exists.")
+        return reaction_db
+
+    universal_matrix = {
+        x.universal_compartmentalized_component_id: x
+        for x in universal_reaction_db.matrix
+    }
+
+    reaction_matrix = []
+    for is_reversed in [False, True]:
+        for participant in reaction_participants:
+            compartmentalized_component_db = participant.compartmentalized_component
+            original_coefficient = participant.coefficient
+            coefficient = -original_coefficient if is_reversed else original_coefficient
+
+            matched_matrix = universal_matrix.get(
+                compartmentalized_component_db.universal_compartmentalized_component_id
+            )
+            if matched_matrix is not None and matched_matrix.coefficient != coefficient:
+                logging.warning(
+                    f"Coefficients do not match: {matched_matrix.coefficient} vs. {coefficient}"
+                )
+                matched_matrix = None
+
+            if matched_matrix is None:
+                # No match is only allowed for H+
+                if (
+                    c_bigg_id := compartmentalized_component_db.component.bigg_id
+                ) != "h:1":
+                    # print(
+                    #     f"No correct match for {compartmentalized_component_db.bigg_id} when creating a reaction for univeral reaction {universal_reaction_db.bigg_id}."
+                    # )
+                    logging.error(f"No correct match for {c_bigg_id}.")
+                    reaction_matrix = []
+                    break
+                matched_matrix = UniversalReactionMatrix(
+                    universal_compartmentalized_component=compartmentalized_component_db.universal_compartmentalized_component,
+                    coefficient=coefficient,
+                )
+            else:
+                del universal_matrix[
+                    compartmentalized_component_db.universal_compartmentalized_component_id
+                ]
+            reaction_matrix.append(
+                ReactionMatrix(
+                    universal_reaction_matrix=matched_matrix,
+                    compartmentalized_component=compartmentalized_component_db,
+                )
+            )
+        else:
+            for unmatched_matrix in universal_matrix.values():
+                if (
+                    uc_bigg_id := unmatched_matrix.universal_compartmentalized_component.universal_component.bigg_id
+                ) != "h":
+                    # print(
+                    #     f"No match for {unmatched_matrix.universal_compartmentalized_component} when creating a reaction for univeral reaction {universal_reaction_db.bigg_id}."
+                    # )
+                    logging.warning(f"Unmatched entries that are not 'h': {uc_bigg_id}")
+                    reaction_matrix = []
+                    break
+        if reaction_matrix:
+            break
+
+    if not reaction_matrix:
+        logging.error("No reaction matrix could be constructed.")
+        return None
+
+    copy_number = (
+        session.scalar(
+            select(func.count(Reaction.id)).filter(
+                Reaction.universal_reaction == universal_reaction_db
+            )
+        )
+        + 1
+    )
+    reaction_bigg_id = Reaction.create_id(universal_reaction_db.bigg_id, copy_number)
+
+    logging.info(f"Creating new reaction '{reaction_bigg_id}'")
+    reaction_db = Reaction(
+        bigg_id=reaction_bigg_id,
+        hash=reaction_hash,
+        model_id=universal_reaction_db.model_id,
+        copy_number=copy_number,
+        universal_reaction=universal_reaction_db,
+    )
+    reaction_db.matrix.extend(reaction_matrix)
+    session.add(reaction_db)
+    return reaction_db
 
 
 def _create_reference_reaction(

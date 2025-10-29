@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-
+from os import PathLike
 from pathlib import Path
+from typing import Union
 from cobra.io import save_json_model, save_yaml_model, write_sbml_model
-from sqlalchemy.orm import contains_eager, joinedload
+from sqlalchemy.orm import Session, contains_eager, joinedload
 
 from cobradb.models import (
     CompartmentalizedComponent,
@@ -25,8 +26,30 @@ from sqlalchemy import select
 import logging
 
 
+def create_model_base_filename(session: Session, bigg_id: str) -> str:
+    base_filename = "".join(
+        [x for x in bigg_id if x.isalpha() or x.isdigit() or x in "_"]
+    )
+    i = 0
+    while True:
+        if i == 0:
+            proposed_filename = base_filename
+        else:
+            import hashlib
+
+            filename_hash = hashlib.sha256(f"{base_filename}{i}".encode()).hexdigest()
+            proposed_filename = f"{base_filename}_{filename_hash[:8]}"
+        model_db = session.scalars(
+            select(Model).filter(Model.base_filename == proposed_filename).limit(1)
+        ).first()
+        if not model_db:
+            return proposed_filename
+        i += 1
+    raise Exception("Should not occur.")
+
+
 @timing
-def process_model(model_filepath, pub_ref, genome_ref, session):
+def process_model(session: Session, model_filepath: Union[str, PathLike]):
     # apply id normalization
     logging.debug("Parsing SBML")
     model, old_parsed_ids = parse.load_and_normalize(model_filepath)
@@ -49,13 +72,15 @@ def process_model(model_filepath, pub_ref, genome_ref, session):
         model_db_id,
     )
 
-    # TODO: Some potential of security issues here. Not a problem as long as the inputs are controlled by maintainers.
-    model_output_path = Path("/models/models/") / model_bigg_id
+    base_filename = create_model_base_filename(session, model_db.bigg_id)
+    model_output_path = Path("/models/models/") / base_filename
     logging.warning(f"Writing corrected model to: {model_output_path}")
     for gz in ["", ".gz"]:
         write_sbml_model(model, model_output_path.with_suffix(f".biggr.sbml{gz}"))
         save_json_model(model, model_output_path.with_suffix(f".biggr.json{gz}"))
-        save_yaml_model(model, model_output_path.with_suffix(f".biggr.yaml{gz}"))
+        save_yaml_model(model, str(model_output_path.with_suffix(f".biggr.yaml{gz}")))
+    model_db.base_filename = base_filename
+    session.commit()
 
     return model_bigg_id, model_db_id
 
@@ -162,7 +187,8 @@ def process_reactions(
             raise ValueError()
 
         reaction.id = model_reaction_db.bigg_id
-        reaction.name = model_reaction_db.reaction.universal_reaction.name
+        reaction_name = model_reaction_db.reaction.universal_reaction.name
+        reaction.name = "" if reaction_name is None else reaction_name
         # reaction.bounds = (model_reaction_db.lower_bound, model_reaction_db.upper_bound)
         # TODO: Handle flipping reactions
 
