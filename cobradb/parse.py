@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 
+from os import PathLike
+from pathlib import Path
+from typing import Union
 from cobradb.models import NotFoundError
 from cobradb.util import scrub_gene_id, load_tsv, increment_id
 from cobradb import settings
@@ -59,17 +62,17 @@ def hash_reaction(reaction, metabolite_dict, string_only=False, reverse=False):
     return hash_metabolite_dictionary(the_dict, string_only)
 
 
-def load_and_normalize(model_filepath):
+def load_and_normalize(model_filepath: Union[str, PathLike]):
     """Load a model, and give it a particular id style"""
 
-    model_filepath = str(model_filepath)
+    model_filepath = Path(model_filepath)
 
     # load the model
-    if model_filepath.endswith(".xml"):
+    if model_filepath.suffix == ".xml":
         model = cobra.io.read_sbml_model(model_filepath)
-    elif model_filepath.endswith(".mat"):
+    elif model_filepath.suffix == ".mat":
         model = cobra.io.load_matlab_model(model_filepath)
-    elif model_filepath.endswith(".json"):
+    elif model_filepath.suffix == ".json":
         model = cobra.io.load_json_model(model_filepath)
     else:
         raise Exception("The %s file is not a valid filetype", model_filepath)

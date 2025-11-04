@@ -13,7 +13,6 @@ os.environ["LIBCHEBIPY_DOWNLOAD_DIR"] = "/chebi"
 import logging
 import time
 from pathlib import Path
-import cProfile
 
 from sqlalchemy.orm import close_all_sessions
 
@@ -25,9 +24,10 @@ from cobradb.models import *
 from cobradb import seed, settings, util
 from cobradb.rhea import load_rhea
 from cobradb.curated_metabolites import load_bigg_ids
-from cobradb.model_loading import load_model
+from cobradb.model_loading import load_model, load_model_assemblies
 from cobradb.version_loading import load_version_date
 from cobradb.memote import load_memote_results, run_memote
+from cobradb.taxonomy import load_taxonomy
 
 import argparse
 
@@ -79,6 +79,7 @@ parser.add_argument(
 parser.add_argument(
     "--skip-model-processing", help="Skip model file processing", action="store_true"
 )
+parser.add_argument("--skip-taxonomy", help="Skip taxonomy tree", action="store_true")
 args = parser.parse_args()
 
 
@@ -114,21 +115,7 @@ def drop_all_tables(engine, enums_to_drop=None):
                 conn.execute(text("DROP TYPE IF EXISTS %s CASCADE" % enum))
 
 
-def main():
-    start_time = time.time()
-    timings = {}
-
-    # Workaround because setting the environment variable does not seem to change anything.
-    chebi_cache_path = Path("/libChEBI")
-    chebi_new_cache_path = Path("/chebi/libChEBI")
-    chebi_new_cache_path.mkdir(parents=True, exist_ok=True)
-    if chebi_cache_path.exists():
-        if not chebi_cache_path.is_symlink():
-            shutil.rmtree(chebi_cache_path)
-            chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
-    else:
-        chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
-
+def prepare_chebi():
     # Make sure all cache files are downloaded
     for i in range(10):
         failed = False
@@ -150,6 +137,22 @@ def main():
             break
         time.sleep(2)  # wait 2 seconds and try again
 
+    # Workaround because setting the environment variable does not seem to change anything.
+    chebi_cache_path = Path("/libChEBI")
+    chebi_new_cache_path = Path("/chebi/libChEBI")
+    chebi_new_cache_path.mkdir(parents=True, exist_ok=True)
+    if chebi_cache_path.exists():
+        if not chebi_cache_path.is_symlink():
+            shutil.rmtree(chebi_cache_path)
+            chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
+    else:
+        chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
+
+
+def main():
+    start_time = time.time()
+    timings = {}
+
     if args.drop_all:
         f_start_time = time.time()
         logging.info("Dropping everything from the database")
@@ -164,11 +167,11 @@ def main():
         with engine.begin() as conn:
             conn.execute(
                 text(
-                    "DROP TABLE IF EXISTS model, model_reaction, model_compartmentalized_component, model_gene, memote_result, model_count, publication_model CASCADE;"
+                    "DROP TABLE IF EXISTS model, model_collection, model_reaction, model_compartmentalized_component, model_gene, memote_result, model_count, publication_model CASCADE;"
                 )
             )
-            conn.execute(text("DELETE FROM reaction WHERE model_id IS NOT NULL;"))
-            conn.execute(text("DELETE FROM reaction WHERE model_id IS NOT NULL;"))
+            conn.execute(text("DELETE FROM reaction WHERE collection_id IS NOT NULL;"))
+            conn.execute(text("DELETE FROM reaction WHERE collection_id IS NOT NULL;"))
 
         timings["drop_models"] = time.time() - f_start_time
 
@@ -188,76 +191,22 @@ def main():
     model_genome_path = settings.model_genome
     refseq_dir = settings.refseq_directory
     logging.info("Loading models and genomes using %s" % model_genome_path)
-    lines = util.load_tsv(model_genome_path, required_column_num=None)
-    models_list = []
 
-    assemblies = {}
-
-    def get_assembly_filenames(assembly_string):
-        assembly_ids = [x.strip() for x in assembly_string.split(",")]
-        r = []
-        for assembly in assembly_ids:
-            r.append(assembly)
-            if assembly in assemblies:
-                continue
-            assembly_file = (
-                Path(refseq_dir)
-                / "ncbi_dataset"
-                / "data"
-                / assembly
-                / "genomic.gbff.gz"
-            )
-            if assembly_file.is_file():
-                assemblies[assembly] = str(assembly_file)
-            else:
-                print(f"Assembly file not found: {assembly_file}")
-                assemblies[assembly] = None
-        return r
-
-    chromosomes = {}
-    for line in lines:
-        if len(line) > 4:
-            line = line[:4]
-        model_filename, pub_ref_string, assembly_ref_string, genome_ref_string_plus = (
-            line
-        )
-        if assembly_ref_string is None:
-            model_assemblies = None
-        else:
-            model_assemblies = get_assembly_filenames(assembly_ref_string)
-        if genome_ref_string_plus is None:
-            model_chromosomes = None
-        else:
-            model_chromosomes = set(
-                [x.strip() for x in genome_ref_string_plus.split(",")]
-            )
-            if not model_assemblies is None:
-                for assembly in model_assemblies:
-                    if not assembly in chromosomes:
-                        chromosomes[assembly] = set()
-                    for chr in model_chromosomes:
-                        chromosomes[assembly].add(chr)
-        if pub_ref_string is None or pub_ref_string.strip() == "None":
-            pub_ref = None
-        else:
-            pub_ref = util.ref_str_to_tuple(pub_ref_string)
-        models_list.append(
-            {
-                "model_filename": model_filename,
-                "pub_ref": pub_ref,
-                "assemblies": model_assemblies,
-                "chromosomes": model_chromosomes,
-                "genome_ref": (
-                    None
-                    if model_assemblies is None
-                    else ("ncbi_assembly", model_assemblies[0])
-                ),
-            }
-        )
+    models_list, assemblies, chromosomes, collection_list = load_model_assemblies(
+        model_genome_path, refseq_dir
+    )
 
     if not args.skip_compartments:
         load_compartments(settings.compartment_names, session)
         session.commit()
+
+    if (
+        not args.skip_rhea
+        and not args.skip_curated_metabolites
+        and not args.skip_curated_reactions
+        and not args.skip_models
+    ):
+        prepare_chebi()
 
     if not args.skip_rhea:
         load_rhea(session, settings.rhea)
@@ -266,8 +215,10 @@ def main():
     if not args.skip_curated_reactions:
         load_reactions(session, settings.curated_reactions)
 
+    if not args.skip_taxonomy:
+        load_taxonomy(session, settings.taxonomy_nodes, settings.taxonomy_names)
+
     # load the genome
-    genomes_for_models = {}
     if not args.skip_genomes:
         f_start_time = time.time()
         # find the accessions for the genbank files
@@ -275,9 +226,6 @@ def main():
 
         n = len(assemblies)
         for i, (assembly_id, assembly_path) in enumerate(assemblies.items()):
-            # if assembly_id != "GCF_000005845.2":
-            #     continue
-
             logging.info(f"Loading assembly {assembly_id} ({i+1} of {n})")
             try:
                 load_assembly(
@@ -296,34 +244,27 @@ def main():
         n = len(models_list)
         model_dir = Path(settings.model_directory)
         for i, model_dict in enumerate(models_list):
-            # if model_dict["model_filename"] not in [
+            # if model_dict["filename"] not in [
             #     "iML1515.json",
             # ]:
             #     continue
             print(model_dict)
             logging.info(
-                "Loading model ({} of {}) {}".format(
-                    i + 1, n, model_dict["model_filename"]
-                )
+                "Loading model ({} of {}) {}".format(i + 1, n, model_dict["filename"])
             )
             model_bigg_id = None
-            already_loaded = False
             try:
                 model_bigg_id, model_db_id = load_model(
-                    model_dir / model_dict["model_filename"],
-                    model_dict["pub_ref"],
-                    model_dict["genome_ref"],
-                    session,
+                    session, model_dict, model_dir=model_dir
                 )
             except AlreadyLoadedError as e:
                 logging.info(str(e))
                 model_bigg_id, model_db_id = e.bigg_id, e.db_id
-                already_loaded = True
             except Exception as e:
                 print(
-                    f"model_dir: '{model_dir}', model_path: '{model_dir / model_dict['model_filename']}'"
+                    f"model_dir: '{model_dir}', model_path: '{model_dir / model_dict['filename']}'"
                 )
-                logging.error("Could not load model %s." % model_dict["model_filename"])
+                logging.error("Could not load model %s." % model_dict["filename"])
                 logging.exception(e)
 
         timings["load_models"] = time.time() - f_start_time
@@ -349,27 +290,27 @@ def main():
         n = len(models_list)
         model_dir = Path(settings.model_directory)
         for i, model_dict in enumerate(models_list):
-            # if model_dict["model_filename"] not in [
+            # if model_dict["filename"] not in [
             #     "iML1515.json",
             # ]:
             #     continue
             print(model_dict)
             logging.info(
                 "Processing model ({} of {}) {}".format(
-                    i + 1, n, model_dict["model_filename"]
+                    i + 1, n, model_dict["filename"]
                 )
             )
             model_bigg_id = None
             try:
                 model_bigg_id, _model_db_id = process_model(
                     session,
-                    model_dir / model_dict["model_filename"],
+                    model_dir / model_dict["filename"],
                 )
             except Exception as e:
                 print(
-                    f"model_dir: '{model_dir}', model_path: '{model_dir / model_dict['model_filename']}'"
+                    f"model_dir: '{model_dir}', model_path: '{model_dir / model_dict['filename']}'"
                 )
-                logging.error("Could not load model %s." % model_dict["model_filename"])
+                logging.error("Could not load model %s." % model_dict["filename"])
                 logging.exception(e)
 
             if not args.skip_memote and model_bigg_id is not None:
@@ -394,8 +335,7 @@ def main():
                         )
                     except Exception as e:
                         logging.error(
-                            "Could not load memote results %s."
-                            % model_dict["model_filename"]
+                            "Could not load memote results %s." % model_dict["filename"]
                         )
                         logging.exception(e)
 

@@ -15,6 +15,7 @@ from cobradb.models import (
     ComponentReferenceMapping,
     InChI,
     Model,
+    ModelCollection,
     ReferenceCompound,
     ReferenceCompoundAnnotationMapping,
     ReferenceReactivePart,
@@ -40,7 +41,10 @@ CHEBI_METABOLITE_PROPERTIES = {
 
 
 def get_universal_component_by_bigg_id(
-    session: Session, universal_bigg_id: str, model_id: Optional[int] = None
+    session: Session,
+    universal_bigg_id: str,
+    model_id: Optional[int] = None,
+    model_collection_id: Optional[int] = None,
 ) -> Optional[UniversalComponent]:
     """Get the univeral component object from a universal BiGG ID. This
     function maps deprecated IDs to the correct new BiGG IDs.
@@ -60,16 +64,23 @@ def get_universal_component_by_bigg_id(
         .limit(1)
     ).first()
     if universal_component_db is None:
-        if model_id is None:
-            model_sel = UniversalComponent.model_id == None
+        if model_id is not None:
+            model_collection_id = session.scalars(
+                select(ModelCollection.id)
+                .join(ModelCollection.models)
+                .filter(Model.id == model_id)
+                .limit(1)
+            ).first()
+        if model_collection_id is None:
+            model_collection_sel = UniversalComponent.collection_id == None
         else:
-            model_sel = (UniversalComponent.model_id == None) | (
-                UniversalComponent.model_id == model_id
+            model_collection_sel = (UniversalComponent.collection_id == None) | (
+                UniversalComponent.collection_id == model_collection_id
             )
         universal_component_db = session.scalars(
             select(UniversalComponent)
             .filter(UniversalComponent.bigg_id == universal_bigg_id)
-            .filter(model_sel)
+            .filter(model_collection_sel)
             .limit(1)
         ).first()
     return universal_component_db
@@ -83,7 +94,7 @@ def _create_component(
     charge: Optional[Union[int, str]] = None,
     formula: Optional[str] = None,
     name: Optional[str] = None,
-    model_db: Optional[Model] = None,
+    collection_db: Optional[ModelCollection] = None,
     require_formula: bool = True,
 ) -> Optional[Component]:
     if reference_compound_db is not None:
@@ -110,7 +121,7 @@ def _create_component(
         name=name,
         formula=formula,
         charge=int_charge,
-        model=model_db,
+        collection=collection_db,
     )
     universal_component_db.components.append(component_db)
     return component_db
@@ -120,13 +131,13 @@ def _create_universal_component(
     session: Session,
     bigg_id: str,
     name: Optional[str] = None,
-    model_db: Optional[Model] = None,
+    collection_db: Optional[ModelCollection] = None,
     default_component: Optional[Component] = None,
 ):
     universal_component_db = UniversalComponent(
         bigg_id=bigg_id,
         name=name,
-        model=model_db,
+        collection=collection_db,
         default_component=default_component,
     )
     session.add(universal_component_db)
@@ -503,10 +514,10 @@ def create_metabolite(
     return {"status": "success", "components_added": successfully_added}
 
 
-def create_model_specific_metabolite(
+def create_collection_specific_metabolite(
     session: Session,
     bigg_id: str,
-    model_db: Model,
+    collection_db: ModelCollection,
     charge: Optional[Any],
     name: str,
     formula: str,
@@ -515,12 +526,12 @@ def create_model_specific_metabolite(
         charge = 0
     new_universal_id = bigg_ids_api.create_component_bigg_id(
         bigg_id,
-        model_bigg_id=model_db.bigg_id,
+        collection_bigg_id=collection_db.bigg_id,
     )
     new_bigg_id = bigg_ids_api.create_component_bigg_id(
         bigg_id,
         charge=charge,
-        model_bigg_id=model_db.bigg_id,
+        collection_bigg_id=collection_db.bigg_id,
     )
 
     if (
@@ -532,7 +543,7 @@ def create_model_specific_metabolite(
             session,
             bigg_id=new_universal_id,
             name=name,
-            model_db=model_db,
+            collection_db=collection_db,
         )
 
     if (
@@ -545,7 +556,7 @@ def create_model_specific_metabolite(
             name=name,
             formula=formula,
             charge=charge,
-            model_db=model_db,
+            collection_db=collection_db,
             require_formula=False,
         )
         if universal_component_db.default_component is None:

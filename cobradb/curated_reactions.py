@@ -1,5 +1,5 @@
 from typing import List, Optional
-from sqlalchemy.orm import Session, contains_eager
+from sqlalchemy.orm import Session
 from cobradb.api import metabolites
 from cobradb.api import reactions
 from cobradb.api.bigg_ids import create_component_bigg_id
@@ -14,6 +14,7 @@ from cobradb.models import (
     CompartmentalizedComponent,
     Component,
     Model,
+    ModelCollection,
     Reaction,
     UniversalReaction,
 )
@@ -121,20 +122,22 @@ def push_reactions(session: Session, data):
             )
             continue
 
-        reaction_model_bigg_id = reaction_data.get("model_bigg_id")
-        if reaction_model_bigg_id is None:
-            reaction_model = None
+        reaction_collection_bigg_id = reaction_data.get("collection_bigg_id")
+        if reaction_collection_bigg_id is None:
+            reaction_collection = None
         else:
-            reaction_model = session.scalars(
-                select(Model).filter(Model.bigg_id == reaction_model_bigg_id).limit(1)
+            reaction_collection = session.scalars(
+                select(ModelCollection)
+                .filter(ModelCollection.bigg_id == reaction_collection_bigg_id)
+                .limit(1)
             ).first()
 
-        if reaction_model is None:
-            model_cond = lambda x: x.model_id == None
+        if reaction_collection is None:
+            collection_cond = lambda x: x.collection_id == None
         else:
-            reaction_model_id = reaction_model.id
-            model_cond = lambda x: (x.model_id == None) | (
-                x.model_id == reaction_model_id
+            reaction_collection_id = reaction_collection.id
+            collection_cond = lambda x: (x.collection_id == None) | (
+                x.collection_id == reaction_collection_id
             )
 
         if not (charge_balanced := is_reaction_charge_balanced(reaction_participants)):
@@ -151,7 +154,7 @@ def push_reactions(session: Session, data):
         reaction_db = session.scalars(
             select(Reaction)
             .filter(Reaction.hash == reaction_hash)
-            .filter(model_cond(Reaction))
+            .filter(collection_cond(Reaction))
             .join(Reaction.universal_reaction)
             .limit(1)
         ).first()
@@ -171,7 +174,7 @@ def push_reactions(session: Session, data):
         universal_reaction_db = session.scalars(
             select(UniversalReaction)
             .filter(UniversalReaction.hash == universal_reaction_hash)
-            .filter(model_cond(UniversalReaction))
+            .filter(collection_cond(UniversalReaction))
             .limit(1)
         ).first()
 
@@ -190,7 +193,7 @@ def push_reactions(session: Session, data):
         reaction_db = session.scalars(
             select(Reaction)
             .filter(Reaction.hash == reaction_hash)
-            .filter(model_cond(Reaction))
+            .filter(collection_cond(Reaction))
             .limit(1)
         ).first()
         if reaction_db is None:

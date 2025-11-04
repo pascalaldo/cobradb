@@ -1,9 +1,8 @@
-from copy import deepcopy
 import logging
 from operator import itemgetter
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, contains_eager, joinedload, subqueryload
+from sqlalchemy.orm import Session
 
 from cobradb.data_sources import get_data_source_id
 from cobradb.models import (
@@ -11,9 +10,8 @@ from cobradb.models import (
     AnnotationLink,
     Compartment,
     CompartmentalizedComponent,
-    Component,
     ComponentReferenceMapping,
-    Model,
+    ModelCollection,
     Reaction,
     ReactionMatrix,
     ReferenceCompound,
@@ -427,7 +425,7 @@ def get_or_create_universal_reaction(
     session: Session,
     bigg_id: str,
     universal_reaction_participants: List[UniversalReactionParticipantInfo],
-    reaction_model_id: Optional[int] = None,
+    reaction_collection_id: Optional[int] = None,
     exchange_reaction: bool = False,
     reaction_name: Optional[str] = None,
 ) -> UniversalReaction:
@@ -439,8 +437,8 @@ def get_or_create_universal_reaction(
         select(UniversalReaction)
         .filter(UniversalReaction.hash == universal_reaction_hash)
         .filter(
-            (UniversalReaction.model_id == None)
-            | (UniversalReaction.model_id == reaction_model_id)
+            (UniversalReaction.collection_id == None)
+            | (UniversalReaction.collection_id == reaction_collection_id)
         )
         .limit(1)
     ).first()
@@ -456,20 +454,20 @@ def get_or_create_universal_reaction(
             session, reference_reaction_participants
         )
 
-    if reaction_model_id is None:
-        reaction_model = None
+    if reaction_collection_id is None:
+        reaction_collection = None
     else:
-        reaction_model = session.get(Model, reaction_model_id)
+        reaction_collection = session.get(ModelCollection, reaction_collection_id)
 
     is_biomass_reaction = reference_db is None and "BIOMASS" in bigg_id.upper()
-    if is_biomass_reaction and reaction_model is not None:
-        bare_bigg_id = bigg_id.removeprefix(f"__{reaction_model.bigg_id}__")
+    if is_biomass_reaction and reaction_collection is not None:
+        bare_bigg_id = bigg_id.removeprefix(f"__{reaction_collection.bigg_id}__")
         other_universal_reaction_db = session.scalars(
             select(UniversalReaction)
             .filter(UniversalReaction.bigg_id == bare_bigg_id)
             .filter(
-                (UniversalReaction.model_id != None)
-                & (UniversalReaction.model_id != reaction_model.id)
+                (UniversalReaction.collection_id != None)
+                & (UniversalReaction.collection_id != reaction_collection.id)
             )
             .limit(1)
         ).first()
@@ -509,7 +507,7 @@ def get_or_create_universal_reaction(
         name=reaction_name,
         reference=reference_db,
         hash=universal_reaction_hash,
-        model=reaction_model,
+        collection=reaction_collection,
         is_exchange=exchange_reaction,
         is_pseudo=is_biomass_reaction,
     )
@@ -556,8 +554,8 @@ def get_or_create_reaction_for_universal_reaction(
         .filter(
             (Reaction.hash == reaction_hash)
             & (
-                (Reaction.model_id == None)
-                | (Reaction.model == universal_reaction_db.model)
+                (Reaction.collection_id == None)
+                | (Reaction.collection == universal_reaction_db.collection)
             )
         )
         .limit(1)
@@ -644,7 +642,7 @@ def get_or_create_reaction_for_universal_reaction(
     reaction_db = Reaction(
         bigg_id=reaction_bigg_id,
         hash=reaction_hash,
-        model_id=universal_reaction_db.model_id,
+        collection_id=universal_reaction_db.collection_id,
         copy_number=copy_number,
         universal_reaction=universal_reaction_db,
     )

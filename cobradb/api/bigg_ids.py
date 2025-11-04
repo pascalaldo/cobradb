@@ -28,7 +28,7 @@ def create_component_bigg_id(
     base_bigg_id: str,
     compartment_bigg_id: Optional[str] = None,
     charge: Optional[Any] = None,
-    model_bigg_id: Optional[str] = None,
+    collection_bigg_id: Optional[str] = None,
 ) -> str:
     bigg_id = base_bigg_id
     if compartment_bigg_id is not None:
@@ -36,6 +36,6 @@ def create_component_bigg_id(
     if charge is not None:
         charge_str = Component.charge_to_string(charge)
         bigg_id = f"{bigg_id}:{charge_str}"
-    if model_bigg_id is not None:
-        bigg_id = f"__{model_bigg_id}__{bigg_id}"
+    if collection_bigg_id is not None:
+        bigg_id = f"__{collection_bigg_id}__{bigg_id}"
     return bigg_id

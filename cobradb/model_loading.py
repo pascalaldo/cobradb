@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 
+import json
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
 from sqlalchemy.orm import Session, contains_eager, joinedload
 from cobradb.api.bigg_ids import create_component_bigg_id
 from cobradb.api.metabolites import (
-    create_model_specific_metabolite,
+    create_collection_specific_metabolite,
     get_universal_component_by_bigg_id,
 )
 from cobradb.api.reactions import (
@@ -23,6 +26,7 @@ from cobradb.models import (
     GeneReactionMatrix,
     Genome,
     Model,
+    ModelCollection,
     ModelCompartmentalizedComponent,
     ModelCount,
     ModelGene,
@@ -32,6 +36,7 @@ from cobradb.models import (
     Reaction,
     ReactionMatrix,
     Synonym,
+    Taxon,
     UniversalCompartmentalizedComponent,
     UniversalReaction,
 )
@@ -40,6 +45,8 @@ from cobradb import parse
 from cobradb.api import utils
 from cobradb.util import (
     format_formula,
+    load_tsv,
+    ref_str_to_tuple,
     scrub_name,
     check_none,
     timing,
@@ -55,6 +62,138 @@ from difflib import SequenceMatcher
 
 class GenbankNotFound(Exception):
     pass
+
+
+def load_model_assemblies(
+    model_genome_path: Union[str, os.PathLike], refseq_dir: Union[str, os.PathLike]
+):
+    model_genome_path = Path(model_genome_path)
+    if model_genome_path.suffix == ".tsv":
+        return load_model_assemblies_tsv(model_genome_path, refseq_dir)
+    elif model_genome_path.suffix == ".json":
+        return load_model_assemblies_json(model_genome_path, refseq_dir)
+    raise ValueError("model_genome_path should be a .tsv or .json file")
+
+
+def load_model_assemblies_json(
+    model_genome_path: Union[str, os.PathLike], refseq_dir: Union[str, os.PathLike]
+):
+    with open(model_genome_path, "r") as f:
+        data = json.load(f)
+    models_list = data.get("models", [])
+    collection_list = data.get("collections", [])
+    assemblies = {}
+    chromosomes = {}
+
+    for model_entry in models_list:
+        if "filename" not in model_entry:
+            logging.error(f"Skipping, no 'filename' defined in entry '{model_entry}'.")
+            continue
+
+        pub_ref = model_entry.get("pub_ref")
+        if pub_ref is not None:
+            if isinstance(pub_ref, str):
+                pub_ref = pub_ref.split(":", maxsplit=1)
+        model_entry["pub_ref"] = pub_ref
+
+        model_assembly = model_entry.get("assembly")
+        if model_assembly is not None and model_assembly not in assemblies:
+            assembly_file = (
+                Path(refseq_dir)
+                / "ncbi_dataset"
+                / "data"
+                / model_assembly
+                / "genomic.gbff.gz"
+            )
+            if assembly_file.is_file():
+                assemblies[model_assembly] = str(assembly_file)
+            else:
+                print(f"Assembly file not found: {assembly_file}")
+                assemblies[model_assembly] = None
+        model_entry["assembly"] = model_assembly
+
+        model_chromosomes = model_entry.get("chromosomes", [])
+        for model_chromosome in model_chromosomes:
+            if model_assembly is not None:
+                if not model_assembly in chromosomes:
+                    chromosomes[model_assembly] = set()
+                chromosomes[model_assembly].add(model_chromosome)
+        model_entry["chromosomes"] = model_chromosomes
+
+    return models_list, assemblies, chromosomes, collection_list
+
+
+def load_model_assemblies_tsv(
+    model_genome_path: Union[str, os.PathLike], refseq_dir: Union[str, os.PathLike]
+):
+    lines = load_tsv(model_genome_path, required_column_num=None)
+    models_list = []
+
+    assemblies = {}
+
+    def get_assembly_filenames(assembly_string):
+        assembly_ids = [x.strip() for x in assembly_string.split(",")]
+        r = []
+        for assembly in assembly_ids:
+            r.append(assembly)
+            if assembly in assemblies:
+                continue
+            assembly_file = (
+                Path(refseq_dir)
+                / "ncbi_dataset"
+                / "data"
+                / assembly
+                / "genomic.gbff.gz"
+            )
+            if assembly_file.is_file():
+                assemblies[assembly] = str(assembly_file)
+            else:
+                print(f"Assembly file not found: {assembly_file}")
+                assemblies[assembly] = None
+        return r
+
+    chromosomes = {}
+    for line in lines:
+        if len(line) > 4:
+            line = line[:4]
+        model_filename, pub_ref_string, assembly_ref_string, genome_ref_string_plus = (
+            line
+        )
+        if assembly_ref_string is None:
+            model_assemblies = None
+        else:
+            model_assemblies = get_assembly_filenames(assembly_ref_string)
+        if genome_ref_string_plus is None:
+            model_chromosomes = None
+        else:
+            model_chromosomes = set(
+                [x.strip() for x in genome_ref_string_plus.split(",")]
+            )
+            if not model_assemblies is None:
+                for assembly in model_assemblies:
+                    if not assembly in chromosomes:
+                        chromosomes[assembly] = set()
+                    for chr in model_chromosomes:
+                        chromosomes[assembly].add(chr)
+        if pub_ref_string is None or pub_ref_string.strip() == "None":
+            pub_ref = None
+        else:
+            pub_ref = ref_str_to_tuple(pub_ref_string)
+        models_list.append(
+            {
+                "filename": model_filename,
+                "pub_ref": pub_ref,
+                "assemblies": model_assemblies,
+                "assembly": None if model_assemblies is None else model_assemblies[0],
+                "chromosomes": model_chromosomes,
+                "genome_ref": (
+                    None
+                    if model_assemblies is None
+                    else ("ncbi_assembly", model_assemblies[0])
+                ),
+            }
+        )
+    return models_list, assemblies, chromosomes, []
 
 
 def get_model_list():
@@ -103,7 +242,11 @@ def improve_name(session, db, new_name):
 
 
 @timing
-def load_model(model_filepath, pub_ref, genome_ref, session):
+def load_model(
+    session: Session,
+    model_data: Dict[str, Any],
+    model_dir: Optional[Union[str, os.PathLike]] = None,
+):
     """Load a model into the database. Returns the bigg_id for the new model.
 
     Arguments
@@ -127,7 +270,11 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
     """
     # apply id normalization
     logging.debug("Parsing SBML")
-    model, old_parsed_ids = parse.load_and_normalize(model_filepath)
+    if model_dir is None:
+        full_path = model_data["filename"]
+    else:
+        full_path = Path(model_dir) / model_data["filename"]
+    model, old_parsed_ids = parse.load_and_normalize(full_path)
     model_bigg_id = model.id
 
     # check that the model doesn't already exist
@@ -140,64 +287,83 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
             db_id=model_db.id,
         )
 
+    organism = None
+    genome_id = None
+    tax_id = None
+    collection_id = None
+
     # check for a genome annotation for this model
-    if genome_ref is not None and genome_ref[0] == "organism":
-        genome_id = None
-        organism = genome_ref[1]
-    elif genome_ref is not None and genome_ref[0] in [
-        "ncbi_accession",
-        "ncbi_assembly",
-    ]:
+    if (assembly := model_data.get("assembly")) is not None:
         genome_db = session.scalars(
             select(Genome)
-            .filter(Genome.accession_type == genome_ref[0])
-            .filter(Genome.accession_value == genome_ref[1])
+            .filter(Genome.accession_type == "ncbi_assembly")
+            .filter(Genome.accession_value == assembly)
             .limit(1)
         ).first()
         if genome_db is None:
             raise GenbankNotFound(
-                "Genome for model {} not found with genome_ref {}".format(
-                    model_bigg_id, genome_ref
+                "Genome for model {} not found with assembly {}".format(
+                    model_bigg_id, assembly
                 )
             )
         genome_id = genome_db.id
         organism = genome_db.organism
-    else:
+        tax_id = genome_db.taxon_id
+
+    if (model_organism := model_data.get("organism")) is not None:
+        organism = model_organism
+
+    if (model_tax_id := model_data.get("tax_id")) is not None:
+        tax_id = model_tax_id
+
+    if organism is not None and tax_id is None:
+        tax_ids = session.scalars(select(Taxon.id).filter(Taxon.name == organism)).all()
+        if len(tax_ids) > 1:
+            logging.error(
+                f"Could not determine tax_id for {model_bigg_id}, because name '{organism}' is associated with multiple tax ids."
+            )
+        elif len(tax_ids) == 1:
+            tax_id = tax_ids[0]
+
+    if not organism and not genome_id:
         logging.info(
             "No Genome reference or organism provided for model {}".format(
                 model_bigg_id
             )
         )
-        genome_id = None
-        organism = None
+
+    collection_db = None
+    if (model_collection_bigg_id := model_data.get("collection")) is not None:
+        collection_db = utils.get_object_by_bigg_id(
+            session, model_collection_bigg_id, ModelCollection
+        )
+    else:
+        # Create single-model collection
+        model_collection_bigg_id = model_bigg_id
+    if collection_db is None:
+        collection_db = ModelCollection(bigg_id=model_collection_bigg_id)
+        session.add(collection_db)
+        session.commit()
+    collection_id = collection_db.id
 
     # Load the model objects. Remember: ORDER MATTERS! So don't mess around.
     logging.debug("Loading objects for model {}".format(model.id))
-    published_filename = os.path.basename(model_filepath)
+    published_filename = os.path.basename(model_data["filename"])
     model_db_id = load_new_model(
-        session, model, genome_id, pub_ref, published_filename, organism
+        session,
+        model,
+        genome_id,
+        model_data.get("pub_ref"),
+        published_filename,
+        organism,
+        tax_id=tax_id,
+        collection_id=collection_id,
     )
 
-    # metabolites/components and linkouts
-    # get compartment names
-    if os.path.exists(settings.compartment_names):
-        with open(settings.compartment_names, "r") as f:
-            compartment_names = {}
-            for line in f.readlines():
-                sp = [x.strip() for x in line.split("\t")]
-                try:
-                    compartment_names[sp[0]] = sp[1]
-                except IndexError:
-                    continue
-    else:
-        logging.warning("No compartment names file")
-        compartment_names = {}
     load_metabolites(
         session,
         model_db_id,
         model,
-        compartment_names,
-        old_parsed_ids["metabolites"],
     )
 
     # # reactions
@@ -208,7 +374,6 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
     )
     #
     # genes
-    model_db_rxn_ids = {}
     load_genes(session, model_db_id, model)
 
     # count model objects for the model summary web page
@@ -220,7 +385,16 @@ def load_model(model_filepath, pub_ref, genome_ref, session):
 
 
 @timing
-def load_new_model(session, model, genome_db_id, pub_ref, published_filename, organism):
+def load_new_model(
+    session,
+    model,
+    genome_db_id,
+    pub_ref,
+    published_filename,
+    organism,
+    collection_id,
+    tax_id=None,
+):
     """Load the model.
 
     Arguments:
@@ -248,11 +422,16 @@ def load_new_model(session, model, genome_db_id, pub_ref, published_filename, or
     The database ID of the new model row.
 
     """
+    if tax_id is not None and session.get(Taxon, tax_id) is None:
+        logging.error(f"Could not find tax id {tax_id} in database.")
+        tax_id = None
     model_db = Model(
         bigg_id=model.id,
         genome_id=genome_db_id,
         published_filename=published_filename,
         organism=organism,
+        taxon_id=tax_id,
+        collection_id=collection_id,
     )
     session.add(model_db)
     if pub_ref is not None:
@@ -282,9 +461,7 @@ def load_new_model(session, model, genome_db_id, pub_ref, published_filename, or
 
 
 @timing
-def load_metabolites(
-    session, model_db_id, model, compartment_names, old_metabolite_ids
-):
+def load_metabolites(session, model_db_id, model):
     """Load the metabolites as components and model components.
 
     Arguments:
@@ -313,6 +490,7 @@ def load_metabolites(
     final_metabolite_ids = {}
 
     model_db = session.get(Model, model_db_id)
+    collection_db = session.get(ModelCollection, model_db.collection_id)
 
     # for each metabolite in the model
     for metabolite in model.metabolites:
@@ -341,7 +519,7 @@ def load_metabolites(
 
         if (
             universal_component_db := get_universal_component_by_bigg_id(
-                session, component_bigg_id, model_id=model_db.id
+                session, component_bigg_id, model_collection_id=collection_db.id
             )
         ) is not None:
             new_universal_bigg_id = universal_component_db.bigg_id
@@ -408,7 +586,8 @@ def load_metabolites(
                 select(Component)
                 .filter(Component.bigg_id == new_biggr_id)
                 .filter(
-                    (Component.model_id == None) | (Component.model_id == model_db.id)
+                    (Component.collection_id == None)
+                    | (Component.collection_id == collection_db.id)
                 )
                 .limit(1)
             ).first()
@@ -432,13 +611,15 @@ def load_metabolites(
             name = scrub_name(getattr(metabolite, "name", None))
             if name is None:
                 name = ""
-            universal_component_db, metabolite_db = create_model_specific_metabolite(
-                bigg_id=new_universal_bigg_id,
-                model_db=model_db,
-                charge=charge,
-                formula=formula,
-                name=name,
-                session=session,
+            universal_component_db, metabolite_db = (
+                create_collection_specific_metabolite(
+                    bigg_id=new_universal_bigg_id,
+                    collection_db=collection_db,
+                    charge=charge,
+                    formula=formula,
+                    name=name,
+                    session=session,
+                )
             )
 
         print(f"%% <> {metabolite_db} ({universal_component_db})")
@@ -554,7 +735,7 @@ def load_metabolites(
                     new_bigg_id = create_component_bigg_id(
                         new_universal_bigg_id,
                         charge=charge,
-                        model_bigg_id=model_db.bigg_id,
+                        collection_bigg_id=collection_db.bigg_id,
                     )
                     temp_comp_db = utils.get_object_by_bigg_id(
                         session, new_bigg_id, Component
@@ -564,9 +745,9 @@ def load_metabolites(
 
                 # make the new metabolite
                 universal_component_db, metabolite_db = (
-                    create_model_specific_metabolite(
+                    create_collection_specific_metabolite(
                         bigg_id=new_universal_bigg_id,
-                        model_db=model_db,
+                        collection_db=collection_db,
                         charge=charge,
                         formula=formula,
                         name="",
@@ -660,6 +841,7 @@ def load_reactions(
     """
 
     model_db = session.get(Model, model_db_id)
+    collection_db = session.get(ModelCollection, model_db.collection_id)
     model_db_rxn_ids = {}
     for reaction in model.reactions:
         # Drop duplicates label
@@ -721,7 +903,10 @@ def load_reactions(
             select(Reaction)
             .filter(
                 (Reaction.hash == reaction_hash)
-                & ((Reaction.model_id == None) | (Reaction.model == model_db))
+                & (
+                    (Reaction.collection_id == None)
+                    | (Reaction.collection_id == collection_db.id)
+                )
             )
             .join(Reaction.universal_reaction)
             .limit(1)
@@ -739,8 +924,8 @@ def load_reactions(
                 select(UniversalReaction)
                 .filter(UniversalReaction.hash == universal_reaction_hash)
                 .filter(
-                    (UniversalReaction.model_id == None)
-                    | (UniversalReaction.model == model_db)
+                    (UniversalReaction.collection_id == None)
+                    | (UniversalReaction.collection_id == collection_db.id)
                 )
                 .limit(1)
             ).first()
@@ -758,7 +943,10 @@ def load_reactions(
                     select(Reaction)
                     .filter(
                         (Reaction.hash == reaction_hash)
-                        & ((Reaction.model_id == None) | (Reaction.model == model_db))
+                        & (
+                            (Reaction.collection_id == None)
+                            | (Reaction.collection_id == collection_db.id)
+                        )
                     )
                     .join(Reaction.universal_reaction)
                     .limit(1)
@@ -785,11 +973,13 @@ def load_reactions(
                         )
                     is_exchange = True
 
-                reaction_model_id = None
+                reaction_collection_id = None
                 if not is_exchange:
-                    print("! Creating model-specific reaction.")
-                    clean_reaction_id = f"__{model_db.bigg_id}__{clean_reaction_id}"
-                    reaction_model_id = model_db.id
+                    print("! Creating collection-specific reaction.")
+                    clean_reaction_id = (
+                        f"__{collection_db.bigg_id}__{clean_reaction_id}"
+                    )
+                    reaction_collection_id = collection_db.id
                 else:
                     print("! Creating exchange reaction.")
 
@@ -797,7 +987,7 @@ def load_reactions(
                     session,
                     clean_reaction_id,
                     universal_participants,
-                    reaction_model_id=reaction_model_id,
+                    reaction_collection_id=reaction_collection_id,
                     exchange_reaction=is_exchange,
                     reaction_name=(
                         reaction_name
@@ -815,7 +1005,10 @@ def load_reactions(
                     select(Reaction)
                     .filter(
                         (Reaction.hash == reaction_hash)
-                        & ((Reaction.model_id == None) | (Reaction.model == model_db))
+                        & (
+                            (Reaction.collection_id == None)
+                            | (Reaction.collection_id == collection_db.id)
+                        )
                     )
                     .join(Reaction.universal_reaction)
                     .limit(1)

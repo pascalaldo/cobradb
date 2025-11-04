@@ -12,7 +12,7 @@ from cobradb.inchi import (
     inchi_object_to_string,
     string_to_inchi_dict,
 )
-from cobradb.settings import db_connection_string
+from cobradb import settings
 
 from sqlalchemy import (
     ForeignKey as SQLAlchemyForeignKey,
@@ -46,7 +46,7 @@ def relationship(*args, **kwargs):
 
 
 # Connect to postgres
-engine = create_engine(db_connection_string)
+engine = create_engine(settings.db_connection_string)
 metadata = MetaData()
 Session = sessionmaker(bind=engine)
 
@@ -205,6 +205,74 @@ class InChI(Base):
         return True
 
 
+def _raise_when_no_value_specified():
+    raise ValueError("A specific value should be set.")
+
+
+class TaxonomicRank(Base):
+    __tablename__ = "taxonomic_rank"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+
+    taxons: Mapped[List["Taxon"]] = relationship(back_populates="rank")
+
+
+class Taxon(Base):
+    __tablename__ = "taxon"
+
+    # Using NCBI taxids, so database should not fill in defaults
+    id: Mapped[int] = mapped_column(
+        primary_key=True, default=_raise_when_no_value_specified
+    )
+    parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("taxon.id"))
+    parent: Mapped[Optional["Taxon"]] = relationship(back_populates="children")
+    children: Mapped[List["Taxon"]] = relationship(
+        back_populates="parent", remote_side=[id]
+    )
+
+    name: Mapped[Optional[str]]
+
+    rank_id: Mapped[int] = mapped_column(ForeignKey(TaxonomicRank.id))
+    rank: Mapped[TaxonomicRank] = relationship(back_populates="taxons")
+
+    genomes: Mapped[List["Genome"]] = relationship(back_populates="taxon")
+    models: Mapped[List["Model"]] = relationship(back_populates="taxon")
+    collections: Mapped[List["ModelCollection"]] = relationship(back_populates="taxon")
+
+
+class ModelCollection(Base, BiGGBase):
+    __tablename__ = "model_collection"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bigg_id: Mapped[str]
+
+    publication_id: Mapped[Optional[int]] = mapped_column(ForeignKey("publication.id"))
+    publication: Mapped[Optional["Publication"]] = relationship(
+        back_populates="collections"
+    )
+
+    taxon_id: Mapped[Optional[int]] = mapped_column(ForeignKey("taxon.id"))
+    taxon: Mapped[Optional[Taxon]] = relationship(back_populates="collections")
+
+    models: Mapped[List["Model"]] = relationship(back_populates="collection")
+
+    collection_namespace_components: Mapped[List["Component"]] = relationship(
+        back_populates="collection"
+    )
+    collection_namespace_universal_components: Mapped[List["UniversalComponent"]] = (
+        relationship(back_populates="collection")
+    )
+    collection_namespace_universal_reactions: Mapped[List["UniversalReaction"]] = (
+        relationship(back_populates="collection")
+    )
+    collection_namespace_reactions: Mapped[List["Reaction"]] = relationship(
+        back_populates="collection"
+    )
+
+    __table_args__ = (UniqueConstraint("bigg_id"),)
+
+
 class Genome(Base):
     __tablename__ = "genome"
 
@@ -212,7 +280,8 @@ class Genome(Base):
     accession_type: Mapped[str]
     accession_value: Mapped[str]
     organism: Mapped[Optional[str]]
-    taxon_id: Mapped[Optional[str]]
+    taxon_id: Mapped[Optional[int]] = mapped_column(ForeignKey("taxon.id"))
+    taxon: Mapped[Optional[Taxon]] = relationship(back_populates="genomes")
     ncbi_assembly_id: Mapped[Optional[str]]
 
     chromosomes: Mapped[List["Chromosome"]] = relationship(back_populates="genome")
@@ -338,9 +407,11 @@ class UniversalComponent(Base, BiGGBase):
         back_populates="universal_component"
     )
 
-    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey("model.id"))
-    model: Mapped[Optional["Model"]] = relationship(
-        back_populates="model_namespace_universal_components"
+    collection_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("model_collection.id")
+    )
+    collection: Mapped[Optional["ModelCollection"]] = relationship(
+        back_populates="collection_namespace_universal_components"
     )
 
     universal_compartmentalized_components: Mapped[
@@ -376,9 +447,11 @@ class Component(Base, BiGGBase):
     formula: Mapped[Optional[str]]
     charge: Mapped[int]
 
-    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey("model.id"))
-    model: Mapped[Optional["Model"]] = relationship(
-        back_populates="model_namespace_components"
+    collection_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("model_collection.id")
+    )
+    collection: Mapped[Optional["ModelCollection"]] = relationship(
+        back_populates="collection_namespace_components"
     )
 
     compartmentalized_components: Mapped[List["CompartmentalizedComponent"]] = (
@@ -673,6 +746,9 @@ class Publication(Base):
     publication_models: Mapped[List["PublicationModel"]] = relationship(
         back_populates="publication"
     )
+    collections: Mapped[List[ModelCollection]] = relationship(
+        back_populates="publication"
+    )
 
     __table_args__ = (UniqueConstraint("reference_type", "reference_id"),)
 
@@ -766,28 +842,21 @@ class Model(Base, BiGGBase):
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
+    collection_id: Mapped[int] = mapped_column(ForeignKey(ModelCollection.id))
+    collection: Mapped[ModelCollection] = relationship(back_populates="models")
+
     base_filename: Mapped[Optional[str]]
 
     genome_id: Mapped[int] = mapped_column(ForeignKey("genome.id"))
     genome: Mapped[Genome] = relationship(back_populates="models")
 
     organism: Mapped[Optional[str]]
+    taxon_id: Mapped[Optional[int]] = mapped_column(ForeignKey("taxon.id"))
+    taxon: Mapped[Optional[Taxon]] = relationship(back_populates="models")
+
     published_filename: Mapped[Optional[str]]
     date_modified: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    model_namespace_components: Mapped[List[Component]] = relationship(
-        back_populates="model"
-    )
-    model_namespace_universal_components: Mapped[List[UniversalComponent]] = (
-        relationship(back_populates="model")
-    )
-    model_namespace_universal_reactions: Mapped[List["UniversalReaction"]] = (
-        relationship(back_populates="model")
-    )
-    model_namespace_reactions: Mapped[List["Reaction"]] = relationship(
-        back_populates="model"
     )
 
     model_genes: Mapped[List["ModelGene"]] = relationship(back_populates="model")
@@ -1205,6 +1274,12 @@ class ReferenceReaction(Base, BiGGBase):
                 else:
                     rc_id = rc.bigg_id
                 coefficient = str(p["coefficient"]).lower()
+            elif isinstance(p, ReferenceReactionParticipant):
+                if p.compound_id is None:
+                    rc_id = p.compound.id
+                else:
+                    rc_id = p.compound_id
+                coefficient = p.coefficient
             else:
                 rc_id = p.reference_compound.bigg_id
                 coefficient = p.universal_reaction_participant_info.coefficient
@@ -1288,9 +1363,9 @@ class UniversalReaction(Base, BiGGBase):
     is_transport: Mapped[bool] = mapped_column(default=False)
     is_pseudo: Mapped[bool] = mapped_column(default=False)
 
-    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey(Model.id))
-    model: Mapped[Optional["Model"]] = relationship(
-        back_populates="model_namespace_universal_reactions"
+    collection_id: Mapped[Optional[int]] = mapped_column(ForeignKey(ModelCollection.id))
+    collection: Mapped[Optional["ModelCollection"]] = relationship(
+        back_populates="collection_namespace_universal_reactions"
     )
 
     reference_id: Mapped[Optional[int]] = mapped_column(
@@ -1376,9 +1451,9 @@ class Reaction(Base, BiGGBase):
 
     hash: Mapped[str]
 
-    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey(Model.id))
-    model: Mapped[Optional["Model"]] = relationship(
-        back_populates="model_namespace_reactions"
+    collection_id: Mapped[Optional[int]] = mapped_column(ForeignKey(ModelCollection.id))
+    collection: Mapped[Optional["ModelCollection"]] = relationship(
+        back_populates="collection_namespace_reactions"
     )
 
     copy_number: Mapped[int]
@@ -1397,7 +1472,10 @@ class Reaction(Base, BiGGBase):
         back_populates="reaction"
     )
 
-    __table_args__ = (UniqueConstraint("hash", "model_id"), UniqueConstraint("bigg_id"))
+    __table_args__ = (
+        UniqueConstraint("hash", "collection_id"),
+        UniqueConstraint("bigg_id"),
+    )
 
     def __repr__(self):
         return "<cobradb Reaction(id=%s)>" % (self.id,)

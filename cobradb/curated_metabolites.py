@@ -1,14 +1,6 @@
 from typing import Any, Dict
-from sqlalchemy import select
 from sqlalchemy.orm import Session
-from cobradb.api.bigg_ids import create_component_bigg_id
-from cobradb.api import metabolites, utils
-from cobradb.models import (
-    Component,
-    ComponentReferenceMapping,
-    ReferenceCompound,
-    UniversalComponent,
-)
+from cobradb.api import metabolites
 from cobradb.util import timing
 
 import logging
