@@ -247,6 +247,9 @@ class ModelCollection(Base, BiGGBase):
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
+    oneliner: Mapped[Optional[str]]
+    description: Mapped[Optional[str]]
+
     publication_id: Mapped[Optional[int]] = mapped_column(ForeignKey("publication.id"))
     publication: Mapped[Optional["Publication"]] = relationship(
         back_populates="collections"

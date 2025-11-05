@@ -6,6 +6,7 @@ import os
 import shutil
 
 
+from cobradb.collections import update_collection_data
 from cobradb.model_processing import process_model
 from cobradb.seed import push_model_seed_metabolites, push_model_seed_reactions
 
@@ -80,6 +81,9 @@ parser.add_argument(
     "--skip-model-processing", help="Skip model file processing", action="store_true"
 )
 parser.add_argument("--skip-taxonomy", help="Skip taxonomy tree", action="store_true")
+parser.add_argument(
+    "--skip-collections", help="Skip model collections loading", action="store_true"
+)
 args = parser.parse_args()
 
 
@@ -268,6 +272,9 @@ def main():
                 logging.exception(e)
 
         timings["load_models"] = time.time() - f_start_time
+    if not args.skip_collections:
+        logging.info("Loading model collections")
+        update_collection_data(session, collection_list)
 
     modelseed_db = None
     if not args.skip_seed_metabolites:
