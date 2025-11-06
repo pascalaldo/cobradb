@@ -10,6 +10,7 @@ from cobradb.models import (
     AnnotationProperty,
     BiGGBase,
     Compartment,
+    CompartmentalizedComponent,
     Component,
     ComponentIDMapping,
     ComponentReferenceMapping,
@@ -621,3 +622,28 @@ def get_or_create_universal_compartmentalized_component(
         )
         session.add(universal_compartmentalized_component_db)
     return universal_compartmentalized_component_db
+
+
+def get_or_create_compartmentalized_component(
+    session: Session,
+    component_db: Component,
+    compartment_db: Compartment,
+) -> CompartmentalizedComponent:
+    compartmentalized_component_db = session.scalars(
+        select(CompartmentalizedComponent)
+        .filter(CompartmentalizedComponent.compartment_id == compartment_db.id)
+        .filter(CompartmentalizedComponent.component == component_db)
+    ).first()
+    if compartmentalized_component_db is None:
+        cc_bigg_id = bigg_ids_api.create_component_bigg_id(
+            base_bigg_id=component_db.universal_component.bigg_id,
+            compartment_bigg_id=compartment_db.bigg_id,
+            charge=component_db.charge,
+        )
+        compartmentalized_component_db = CompartmentalizedComponent(
+            bigg_id=cc_bigg_id,
+            component=component_db,
+            compartment=compartment_db,
+        )
+        session.add(compartmentalized_component_db)
+    return compartmentalized_component_db

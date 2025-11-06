@@ -250,7 +250,7 @@ def load_chromosome(record, genome_db, session):
         if genome_db.taxon_id is None and feature.type == "source":
             for ref in _get_qual(feature, "db_xref"):
                 if "taxon" == ref.split(":")[0]:
-                    genome_db.taxon_id = ref.split(":")[1]
+                    genome_db.taxon_id = int(ref.split(":")[1])
                     break
             continue
 

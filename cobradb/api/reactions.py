@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Tuple, Union
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from cobradb.api import metabolites
 from cobradb.data_sources import get_data_source_id
 from cobradb.models import (
     Annotation,
@@ -52,6 +53,9 @@ class ReactionParticipantInfo:
     def charge(self):
         return self.compartmentalized_component.component.charge
 
+    def __repr__(self):
+        return f"<ReactionParticipantInfo cc='{self.compartmentalized_component.bigg_id} coeff='{self.coefficient}' charge='{self.charge}'>"
+
 
 class UniversalReactionParticipantInfo:
     def __init__(
@@ -78,6 +82,9 @@ class UniversalReactionParticipantInfo:
         return (
             self.universal_compartmentalized_component.universal_component.default_component.charge
         )
+
+    def __repr__(self):
+        return f"<UniversalReactionParticipantInfo ucc='{self.universal_compartmentalized_component.bigg_id} coeff='{self.coefficient}' charge='{self.charge}'>"
 
 
 class ReferenceReactionParticipantInfo:
@@ -114,9 +121,8 @@ def is_reaction_mass_balanced(
 ) -> bool:
     overall_counts = {}
     for reaction_participant in reaction_participants:
-        d_formula = utils.formula_to_dict(
-            reaction_participant.compartmentalized_component.component.formula
-        )
+        formula = reaction_participant.compartmentalized_component.component.formula
+        d_formula = utils.formula_to_dict(formula)
         for k, v in d_formula.items():
             n = v * reaction_participant.coefficient
             if k in overall_counts:
@@ -140,13 +146,13 @@ def _get_compartment_charge_dict(
     return participants_charge
 
 
-def _corrected_charge_diffs(charge_dict_1, charge_dict_2):
+def _corrected_charge_diffs(charge_dict_1, charge_dict_2, offset=0):
     charge_diffs = {
         c: int(charge_dict_1[c] - charge_dict_2[c])
         for c in (set(charge_dict_1.keys()) | set(charge_dict_2.keys()))
     }
 
-    if (total_charge_diff := sum(charge_diffs.values())) == 0:
+    if (total_charge_diff := (sum(charge_diffs.values()) + offset)) == 0:
         return None
 
     # Add hydrons in compartments with the biggest difference first.
@@ -165,12 +171,47 @@ def _corrected_charge_diffs(charge_dict_1, charge_dict_2):
             remaining_charge_diff = 0
         if remaining_charge_diff == 0:
             break
+
+    if remaining_charge_diff != 0:
+        if len(charge_diffs) == 1:
+            k = next(iter(charge_diffs.keys()))
+            if k not in corr_charge_diffs:
+                corr_charge_diffs[k] = 0
+            corr_charge_diffs[k] += remaining_charge_diff
+            remaining_charge_diff = 0
+
     return corr_charge_diffs
+
+
+def get_default_reaction_participants_list(
+    session: Session,
+    universal_reaction_participants: List[UniversalReactionParticipantInfo],
+) -> Optional[List[ReactionParticipantInfo]]:
+
+    reaction_participants = []
+    for participant in universal_reaction_participants:
+        dc_db = (
+            participant.universal_compartmentalized_component.universal_component.default_component
+        )
+        if dc_db is None:
+            return None
+        cc_db = metabolites.get_or_create_compartmentalized_component(
+            session,
+            dc_db,
+            participant.universal_compartmentalized_component.compartment,
+        )
+        rp = ReactionParticipantInfo(
+            compartmentalized_component=cc_db,
+            coefficient=participant.coefficient,
+        )
+        reaction_participants.append(rp)
+    return reaction_participants
 
 
 def get_universal_reaction_participants_list(
     session: Session,
     reaction_participants: List[ReactionParticipantInfo],
+    balance_charge: bool = False,
 ) -> List[UniversalReactionParticipantInfo]:
     universal_participants = [
         UniversalReactionParticipantInfo(
@@ -184,8 +225,12 @@ def get_universal_reaction_participants_list(
     participants_charge = _get_compartment_charge_dict(reaction_participants)
     universal_participants_charge = _get_compartment_charge_dict(universal_participants)
 
+    offset = 0
+    if balance_charge:
+        offset = -sum(participants_charge.values())
+
     corr_charge_diffs = _corrected_charge_diffs(
-        participants_charge, universal_participants_charge
+        participants_charge, universal_participants_charge, offset
     )
     if corr_charge_diffs is None:
         return universal_participants

@@ -6,7 +6,7 @@ import re
 from cobradb.models import BiGGBase
 
 FORMULA_PATTERN = re.compile(r"(([A-Z][a-z]?)([0-9])*)+")
-FORMULA_PATTERN_SINGLE = re.compile(r"([A-Z][a-z]?)([0-9])*")
+FORMULA_PATTERN_SINGLE = re.compile(r"([A-Z][a-z]?)([0-9]*)((?=[A-Z])|$)")
 
 
 T = TypeVar("T", bound=BiGGBase)
@@ -43,6 +43,8 @@ def fix_explicit_formula(formula, allow_R=False) -> Tuple[bool, Optional[str]]:
     for m in FORMULA_PATTERN_SINGLE.finditer(formula):
         atom = m[1]
         mult = m[2]
+        if mult == "":
+            mult = None
         if atom == "R" and not allow_R:
             return False, None
         if mult is not None and int(mult) == "1":
@@ -58,7 +60,7 @@ def formula_to_dict(formula):
     for m in FORMULA_PATTERN_SINGLE.finditer(formula):
         atom = m[1]
         mult = m[2]
-        if mult is None:
+        if mult is None or mult == "":
             mult = 1
         mult = int(mult)
         d[atom] = mult

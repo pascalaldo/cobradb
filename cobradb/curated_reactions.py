@@ -5,6 +5,8 @@ from cobradb.api import reactions
 from cobradb.api.bigg_ids import create_component_bigg_id
 from cobradb.api.reactions import (
     ReactionParticipantInfo,
+    get_default_reaction_participants_list,
+    get_universal_reaction_participants_list,
     is_reaction_charge_balanced,
     is_reaction_mass_balanced,
 )
@@ -16,6 +18,7 @@ from cobradb.models import (
     Model,
     ModelCollection,
     Reaction,
+    ReferenceReaction,
     UniversalReaction,
 )
 from cobradb.util import timing
@@ -23,8 +26,6 @@ from cobradb.util import timing
 from sqlalchemy import select
 import logging
 import json
-
-from pprint import pprint
 
 
 def load_bigg_id_data(filename):
@@ -51,11 +52,11 @@ def parse_reaction_participants(
                 session, universal_id
             )
             if universal_component_db is None:
-                logging.warning(f"Participant {full_id}: No universal component found.")
+                # logging.warning(f"Participant {full_id}: No universal component found.")
                 return None
             compartment_db = get_object_by_bigg_id(session, compartment, Compartment)
             if compartment_db is None:
-                logging.warning(f"Participant {full_id}: No compartment found.")
+                # logging.warning(f"Participant {full_id}: No compartment found.")
                 return None
 
             if charge is None:
@@ -70,7 +71,7 @@ def parse_reaction_participants(
                     .limit(1)
                 ).first()
             if component_db is None:
-                logging.warning(f"Participant {full_id}: No component found.")
+                # logging.warning(f"Participant {full_id}: No component found.")
                 return None
 
             compartmentalized_component_db = session.scalars(
@@ -108,18 +109,13 @@ def parse_reaction_participants(
 @timing
 def push_reactions(session: Session, data):
     for n, (bigg_id, reaction_data) in enumerate(data.items()):
-        print("###")
-        print(f"{bigg_id}: {reaction_data['name']}")
-        print(f" RHEA: {reaction_data.get('rhea')}")
-        pprint(reaction_data["participants"])
-
         reaction_participants = parse_reaction_participants(
             session, reaction_data["participants"]
         )
         if reaction_participants is None:
-            logging.error(
-                f"Could not parse reaction participants for '{bigg_id}' ({reaction_data['participants']})"
-            )
+            # logging.error(
+            #     f"Could not parse reaction participants for '{bigg_id}' ({reaction_data['participants']})"
+            # )
             continue
 
         reaction_collection_bigg_id = reaction_data.get("collection_bigg_id")
@@ -141,7 +137,23 @@ def push_reactions(session: Session, data):
             )
 
         if not (charge_balanced := is_reaction_charge_balanced(reaction_participants)):
-            logging.error(f"Reaction {bigg_id} is not charge balanced.")
+            logging.error(
+                f"Reaction template is unbalanced for reaction {bigg_id}, fixing."
+            )
+            universal_reaction_participants = get_universal_reaction_participants_list(
+                session, reaction_participants, balance_charge=True
+            )
+            reaction_participants = get_default_reaction_participants_list(
+                session, universal_reaction_participants
+            )
+            if reaction_participants is None:
+                logging.error(
+                    f"Failed to update reaction participants to correct charge of reaction {bigg_id}."
+                )
+                continue
+
+        if not (charge_balanced := is_reaction_charge_balanced(reaction_participants)):
+            logging.error(f"Failed to correct charge of reaction {bigg_id}.")
             continue
 
         if not (mass_balanced := is_reaction_mass_balanced(reaction_participants)):
@@ -160,9 +172,9 @@ def push_reactions(session: Session, data):
         ).first()
 
         if reaction_db is not None:
-            logging.warning(
-                f"Reaction '{bigg_id}' already in database as '{reaction_db.bigg_id}', skipping."
-            )
+            # logging.warning(
+            #     f"Reaction '{bigg_id}' already in database as '{reaction_db.bigg_id}', skipping."
+            # )
             continue
 
         universal_participants = reactions.get_universal_reaction_participants_list(
