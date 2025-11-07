@@ -943,6 +943,10 @@ class ModelReaction(Base, BiGGBase):
         back_populates="model_reaction"
     )
 
+    escher_mappings: Mapped[List["ModelReactionEscherMapping"]] = relationship(
+        back_populates="model_reaction"
+    )
+
     __table_args__ = (
         UniqueConstraint("reaction_id", "model_id", "copy_number"),
         UniqueConstraint("model_id", "bigg_id"),
@@ -1669,3 +1673,37 @@ class MemoteResult(Base):
     result = mapped_column(custom_enums["test_result"], nullable=True)
 
     data_count: Mapped[Optional[int]]
+
+
+class EscherModule(Base, BiGGBase):
+    __tablename__ = "escher_module"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bigg_id: Mapped[str]
+
+    name: Mapped[str]
+    description: Mapped[str]
+
+    model_reaction_mappings: Mapped[List["ModelReactionEscherMapping"]] = relationship(
+        back_populates="escher_module"
+    )
+
+    __table_args__ = (UniqueConstraint("bigg_id"),)
+
+
+class ModelReactionEscherMapping(Base):
+    __tablename__ = "model_reaction_escher_mapping"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    model_reaction_id: Mapped[int] = mapped_column(ForeignKey(ModelReaction.id))
+    model_reaction: Mapped[ModelReaction] = relationship(
+        back_populates="escher_mappings"
+    )
+
+    escher_module_id: Mapped[int] = mapped_column(ForeignKey(EscherModule.id))
+    escher_module: Mapped[EscherModule] = relationship(
+        back_populates="model_reaction_mappings"
+    )
+
+    __table_args__ = (UniqueConstraint("model_reaction_id", "escher_module_id"),)

@@ -7,6 +7,7 @@ import shutil
 
 
 from cobradb.collections import update_collection_data
+from cobradb.escher import create_escher_modules
 from cobradb.model_processing import process_model
 from cobradb.seed import push_model_seed_metabolites, push_model_seed_reactions
 
@@ -179,6 +180,20 @@ def main():
 
         timings["drop_models"] = time.time() - f_start_time
 
+    if args.drop_maps and not args.drop_all:
+        f_start_time = time.time()
+        from sqlalchemy.sql.expression import text
+
+        logging.info("Dropping rows from maps")
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "DROP TABLE IF EXISTS escher_module, model_reaction_escher_mapping CASCADE;"
+                )
+            )
+
+        timings["drop_maps"] = time.time() - f_start_time
+
     f_start_time = time.time()
     logging.info("Building the database models")
     Base.metadata.create_all(bind=engine)
@@ -290,6 +305,10 @@ def main():
             modelseed_db = seed.load_modelseed_database(modelseed_dir)
         push_model_seed_reactions(modelseed_db, session)
         session.commit()
+
+    if not args.skip_maps:
+        logging.info("Creating escher maps for models")
+        create_escher_modules(session)
 
     if not args.skip_model_processing:
         f_start_time = time.time()
