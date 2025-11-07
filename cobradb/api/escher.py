@@ -92,10 +92,11 @@ class EscherBackboneModuleDefinition(EscherModuleDefinition):
             )
         return reactants
 
-    def build_map(self, model_reactions: Iterable[ModelReaction]):
+    def build_map(self, model_reactions: Iterable[ModelReaction]) -> map.Map:
         m = super().build_map(model_reactions)
 
         for node in self.backbone.values():
+            node.identifier = None
             m.add_node(node)
 
         for model_reaction in model_reactions:
