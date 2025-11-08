@@ -76,7 +76,7 @@ class EscherBackboneModuleDefinition(EscherModuleDefinition):
         reactants = []
         for reaction_matrix in model_reaction.reaction.matrix:
             cc_db = reaction_matrix.compartmentalized_component
-            if (node := self.backbone.get(cc_db.bigg_id)) is None:
+            if (node := backbone.get(cc_db.bigg_id)) is None:
                 name = cc_db.component.name
                 if name is None:
                     name = cc_db.component.universal_component.name
