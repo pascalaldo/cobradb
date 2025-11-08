@@ -71,7 +71,7 @@ class EscherBackboneModuleDefinition(EscherModuleDefinition):
         return selected_model_reactions
 
     def _build_reaction(
-        self, model_reaction: ModelReaction
+        self, model_reaction: ModelReaction, backbone: Dict[str, map.MetaboliteNode]
     ) -> List[Tuple[Union[int, float], map.MetaboliteNode]]:
         reactants = []
         for reaction_matrix in model_reaction.reaction.matrix:
@@ -95,12 +95,12 @@ class EscherBackboneModuleDefinition(EscherModuleDefinition):
     def build_map(self, model_reactions: Iterable[ModelReaction]) -> map.Map:
         m = super().build_map(model_reactions)
 
-        for node in self.backbone.values():
-            node.identifier = None
+        backbone = {bigg_id: node.copy() for bigg_id, node in self.backbone.items()}
+        for node in backbone.values():
             m.add_node(node)
 
         for model_reaction in model_reactions:
-            reaction_info = self._build_reaction(model_reaction)
+            reaction_info = self._build_reaction(model_reaction, backbone)
             name = model_reaction.reaction.universal_reaction.name
             if name is None:
                 name = "Unknown"
