@@ -138,7 +138,11 @@ ESCHER_MODULE_DEFINITION_LIST = [
         ],
         placement_kwargs=dict(
             placement_f=partial(pathway.alternating_pathways_sides, centered=False),
-            add_metabolite_opts=dict(placement_f=map.AutoReaction.same_side_placement),
+            add_metabolite_opts=dict(
+                placement_opts=map.PlacementOptions(
+                    placement_f=map.AutoReaction.same_side_placement
+                )
+            ),
         ),
     ),
     EscherBackboneModuleDefinition(
@@ -163,7 +167,11 @@ ESCHER_MODULE_DEFINITION_LIST = [
         ],
         placement_kwargs=dict(
             placement_f=partial(pathway.alternating_pathways_sides, centered=False),
-            add_metabolite_opts=dict(placement_f=map.AutoReaction.same_side_placement),
+            add_metabolite_opts=dict(
+                placement_opts=map.PlacementOptions(
+                    placement_f=map.AutoReaction.same_side_placement
+                )
+            ),
         ),
     ),
 ]
