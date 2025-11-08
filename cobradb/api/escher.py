@@ -43,6 +43,15 @@ class EscherModuleDefinition:
         return m
 
 
+def _reactants_sorting(vals):
+    node: map.MetaboliteNode = vals[1]
+    if node.node_is_primary:
+        return 0
+    if node.bigg_id.startswith("h_"):
+        return 2
+    return 1
+
+
 class EscherBackboneModuleDefinition(EscherModuleDefinition):
     def __init__(
         self,
@@ -90,6 +99,7 @@ class EscherBackboneModuleDefinition(EscherModuleDefinition):
             reactants.append(
                 (reaction_matrix.universal_reaction_matrix.coefficient, node)
             )
+        reactants = list(sorted(reactants, key=_reactants_sorting))
         return reactants
 
     def build_map(self, model_reactions: Iterable[ModelReaction]) -> map.Map:
