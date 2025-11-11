@@ -1,9 +1,12 @@
 from functools import partial
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from cobradb import get_data
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from cobradb.models import EscherModule, ModelReaction
-from biggr_maps import map, pathway
+from cobradb.models import EscherModule, ModelReaction, ReactionMatrix
+from biggr_maps import map, pathway, template
+from pathlib import Path
+import os
 
 
 class EscherModuleDefinition:
@@ -125,6 +128,182 @@ class EscherBackboneModuleDefinition(EscherModuleDefinition):
         return m
 
 
+class EscherTemplateModuleDefinition(EscherModuleDefinition):
+    def __init__(
+        self,
+        bigg_id: str,
+        template_filename: Union[str, os.PathLike],
+        bigg_ids_in_template_are_universal: bool = False,
+        required_fraction_matching_reactions: float = 0.5,
+    ):
+        self.bigg_id = bigg_id
+        self.template_filename = Path(template_filename)
+        self.bigg_ids_in_template_are_universal = bigg_ids_in_template_are_universal
+        self.required_fraction_matching_reactions = required_fraction_matching_reactions
+        super().__init__(bigg_id=bigg_id, name="Template", description="Template")
+
+    def load_template(self):
+        full_path = get_data("escher_templates", self.template_filename)
+        with open(full_path, "r") as f:
+            m, reactions, nodes = template.load_as_template(f)
+        return m, reactions, nodes
+
+    def select_model_reactions(
+        self, model_reactions: Iterable[ModelReaction]
+    ) -> List[ModelReaction]:
+        _, reactions, _ = self.load_template()
+        selected_model_reactions = []
+        for model_reaction in model_reactions:
+            model_reaction_bigg_ids = []
+            for reaction_matrix in model_reaction.reaction.matrix:
+                if self.bigg_ids_in_template_are_universal:
+                    bigg_id = (
+                        reaction_matrix.compartmentalized_component.universal_compartmentalized_component.bigg_id
+                    )
+                else:
+                    bigg_id = reaction_matrix.compartmentalized_component.bigg_id
+                model_reaction_bigg_ids.append(bigg_id)
+
+            for reaction in reactions:
+                if reaction.finalized:
+                    continue
+                for _, metabolite in reaction.metabolites:
+                    if metabolite.bigg_id not in model_reaction_bigg_ids:
+                        break
+                else:
+                    selected_model_reactions.append(model_reaction)
+                    reaction.finalized = True
+                    break
+        if (
+            len(selected_model_reactions) / len(reactions)
+        ) < self.required_fraction_matching_reactions:
+            return []
+        return selected_model_reactions
+
+    def _build_reaction(
+        self,
+        reaction: map.AutoReactionWithOptionalMetabolites,
+        model_reaction_bigg_ids: Dict[str, str],
+        model_reaction_matrix_dbs: Dict[str, ReactionMatrix],
+    ):
+
+        for i in range(len(reaction.metabolites)):
+            coefficient, node = reaction.metabolites[i]
+            bigg_id = node.bigg_id
+
+            reaction_matrix = model_reaction_matrix_dbs[bigg_id]
+            new_bigg_id = model_reaction_bigg_ids[bigg_id]
+
+            if (
+                new_coefficient := reaction_matrix.universal_reaction_matrix.coefficient
+            ) != coefficient:
+                reaction.metabolites[i] = (new_coefficient, node)
+
+            node.bigg_id = new_bigg_id
+            name = reaction_matrix.compartmentalized_component.component.name
+            if name is None:
+                name = (
+                    reaction_matrix.compartmentalized_component.component.universal_component.name
+                )
+            if name is not None:
+                node.name = name
+            del model_reaction_bigg_ids[bigg_id]
+            del model_reaction_matrix_dbs[bigg_id]
+
+        for bigg_id, metabolite_info in reaction.optional_metabolites.items():
+            if bigg_id not in model_reaction_bigg_ids:
+                continue
+            reaction_matrix = model_reaction_matrix_dbs[bigg_id]
+            new_bigg_id = model_reaction_bigg_ids[bigg_id]
+
+            node = metabolite_info["node"]
+            if (
+                new_coefficient := reaction_matrix.universal_reaction_matrix.coefficient
+            ) != metabolite_info["coefficient"]:
+                metabolite_info["coefficient"] = new_coefficient
+
+            node.bigg_id = new_bigg_id
+            name = reaction_matrix.compartmentalized_component.component.name
+            if name is None:
+                name = (
+                    reaction_matrix.compartmentalized_component.component.universal_component.name
+                )
+            if name is not None:
+                node.name = name
+
+            reaction.add_metabolite(**metabolite_info)
+            del model_reaction_bigg_ids[bigg_id]
+            del model_reaction_matrix_dbs[bigg_id]
+
+        for bigg_id, reaction_matrix in model_reaction_matrix_dbs.items():
+            new_bigg_id = model_reaction_bigg_ids[bigg_id]
+
+            cc_db = reaction_matrix.compartmentalized_component
+            name = cc_db.component.name
+            if name is None:
+                name = cc_db.component.universal_component.name
+            if name is None:
+                name = "Unknown"
+            node = map.MetaboliteNode(
+                bigg_id=cc_db.bigg_id,
+                name=name,
+                node_is_primary=False,
+            )
+            reaction.add_metabolite(
+                coefficient=reaction_matrix.universal_reaction_matrix.coefficient,
+                node=node,
+            )
+        reaction.finalized = True
+
+    def build_map(self, model_reactions: Iterable[ModelReaction]) -> map.Map:
+        m, reactions, _ = self.load_template()
+
+        bigg_id_mapping = {}
+
+        for model_reaction in model_reactions:
+            model_reaction_bigg_ids = {}
+            model_reaction_matrix_dbs = {}
+            for reaction_matrix in model_reaction.reaction.matrix:
+                if self.bigg_ids_in_template_are_universal:
+                    bigg_id = (
+                        reaction_matrix.compartmentalized_component.universal_compartmentalized_component.bigg_id
+                    )
+                    cc_bigg_id = reaction_matrix.compartmentalized_component.bigg_id
+                    model_reaction_bigg_ids[bigg_id] = cc_bigg_id
+                else:
+                    bigg_id = reaction_matrix.compartmentalized_component.bigg_id
+                    model_reaction_bigg_ids[bigg_id] = bigg_id
+                model_reaction_matrix_dbs[bigg_id] = reaction_matrix
+
+            for bigg_id_1, bigg_id_2 in model_reaction_bigg_ids.items():
+                if bigg_id_1 not in bigg_id_mapping:
+                    continue
+                if bigg_id_mapping[bigg_id_1] == bigg_id_2:
+                    continue
+                break
+            else:
+                for reaction in reactions:
+                    if reaction.finalized:
+                        continue
+                    for _, metabolite in reaction.metabolites:
+                        if metabolite.bigg_id not in model_reaction_bigg_ids:
+                            break
+                    else:
+                        bigg_id_mapping.update(model_reaction_bigg_ids)
+                        self._build_reaction(
+                            reaction,
+                            model_reaction_bigg_ids,
+                            model_reaction_matrix_dbs,
+                        )
+                        break
+        for reaction in reactions:
+            if not reaction.finalized:
+                continue
+            m.add_reaction(reaction)
+
+        return m
+
+
 ESCHER_MODULE_DEFINITION_LIST = [
     EscherBackboneModuleDefinition(
         bigg_id="ubiquinone",
@@ -183,6 +362,11 @@ ESCHER_MODULE_DEFINITION_LIST = [
                 )
             ),
         ),
+    ),
+    EscherTemplateModuleDefinition(
+        bigg_id="central_metabolism_1",
+        template_filename="iJO1366.Central metabolism.json",
+        bigg_ids_in_template_are_universal=True,
     ),
 ]
 ESCHER_MODULE_DEFINITIONS = {m.bigg_id: m for m in ESCHER_MODULE_DEFINITION_LIST}
