@@ -5,8 +5,6 @@
 from configparser import ConfigParser, NoOptionError
 import os
 from os.path import normpath, isfile, expanduser
-from typing import Optional
-import six
 
 config = ConfigParser()
 
@@ -30,6 +28,8 @@ class CobraDBSettings:
     taxonomy_nodes: str = ""
     taxonomy_names: str = ""
 
+    n_processes: int = 1
+
     def __init__(self):
         # overwrite defaults settings with settings from the file
         # filepath = abspath(join(dirname(__file__), '..', 'settings.ini'))
@@ -48,7 +48,7 @@ class CobraDBSettings:
             "postgres_database": "COBRADB_POSTGRES_DATABASE",
             "postgres_test_database": "COBRADB_POSTGRES_TEST_DATABASE",
         }
-        for setting_name, env_name in six.iteritems(env_names):
+        for setting_name, env_name in env_names.items():
             if env_name in os.environ:
                 print(
                     "Setting %s with environment variable %s" % (setting_name, env_name)
@@ -65,6 +65,11 @@ class CobraDBSettings:
             self.postgres_port,
             self.postgres_database,
         )
+
+        if config.has_option("GENERAL", "n_processes"):
+            self.n_processes = int(config.get("GENERAL", "n_processes"))
+        else:
+            print("No Java executable provided.")
 
         # get the java executable (optional, for running Model Polisher)
         if config.has_option("EXECUTABLES", "java"):

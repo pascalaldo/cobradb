@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
@@ -103,9 +101,11 @@ def load_model_assemblies_json(
                 / "ncbi_dataset"
                 / "data"
                 / model_assembly
-                / "genomic.gbff.gz"
+                / "genomic.gbff"
             )
-            if assembly_file.is_file():
+            if (gz_file := assembly_file.with_suffix(".gbff.gz")).is_file():
+                assemblies[model_assembly] = str(gz_file)
+            elif assembly_file.is_file():
                 assemblies[model_assembly] = str(assembly_file)
             else:
                 print(f"Assembly file not found: {assembly_file}")
@@ -712,11 +712,14 @@ def load_metabolites(session, model_db_id, model):
                 if mcc_db.compartmentalized_component == comp_component_db:
                     mcc_duplicates += 1
             if mcc_duplicates == 0:
-                model_comp_comp_id = create_component_bigg_id(
-                    universal_component_db.bigg_id,
-                    compartment_bigg_id=compartment_db.bigg_id,
-                    charge=metabolite_db.charge,
-                )
+                if len(model_comp_comp_db_all) > 0:
+                    model_comp_comp_id = create_component_bigg_id(
+                        universal_component_db.bigg_id,
+                        compartment_bigg_id=compartment_db.bigg_id,
+                        charge=metabolite_db.charge,
+                    )
+                else:
+                    model_comp_comp_id = universal_comp_component_db.bigg_id
                 model_comp_comp_db = ModelCompartmentalizedComponent(
                     bigg_id=model_comp_comp_id,
                     model=model_db,
@@ -759,7 +762,7 @@ def load_metabolites(session, model_db_id, model):
                 model_comp_comp_id = create_component_bigg_id(
                     universal_component_db.bigg_id,
                     compartment_bigg_id=compartment_db.bigg_id,
-                    charge=metabolite_db.charge,
+                    # charge=metabolite_db.charge,
                 )
                 comp_comp_id = create_component_bigg_id(
                     universal_component_db.bigg_id,
@@ -853,6 +856,9 @@ def load_reactions(
         clean_reaction_id, model_reaction_copy_number = parse.split_id_and_copy_tag(
             clean_reaction_id
         )
+
+        reaction_name = rn if (rn := reaction.name.strip()) != "" else None
+
         # TODO: Make sure to keep copy number equal model and biggr
 
         met_mappings = {
@@ -989,11 +995,7 @@ def load_reactions(
                     universal_participants,
                     reaction_collection_id=reaction_collection_id,
                     exchange_reaction=is_exchange,
-                    reaction_name=(
-                        reaction_name
-                        if (reaction_name := reaction.name.strip()) != ""
-                        else None
-                    ),
+                    reaction_name=reaction_name,
                 )
                 session.commit()
                 reaction_db = get_or_create_reaction_for_universal_reaction(
@@ -1016,6 +1018,9 @@ def load_reactions(
 
         if reaction_db is None:
             print("ERROR: Reaction was not correctly created.")
+
+        if reaction_db.universal_reaction.name is None and reaction_name is not None:
+            reaction_db.universal_reaction.name = reaction_name
 
         logging.warning(f"Reaction {clean_reaction_id}: {reaction_db}")
 

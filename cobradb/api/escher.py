@@ -464,10 +464,16 @@ ESCHER_MODULE_DEFINITION_LIST = [
         ),
     ),
     EscherTemplateModuleDefinition(
-        bigg_id="central_metabolism_1",
-        template_filename="iJO1366.Central metabolism.json",
+        bigg_id="simple_central_metabolism",
+        template_filename="simple_central_metabolism.json",
         bigg_ids_in_template_are_universal=True,
-        required_fraction_matching_reactions=0.0,
+        required_fraction_matching_reactions=0.5,
+    ),
+    EscherTemplateModuleDefinition(
+        bigg_id="nucleotide_histidine_biosynthesis",
+        template_filename="nucleotide_histidine_biosynthesis.json",
+        bigg_ids_in_template_are_universal=True,
+        required_fraction_matching_reactions=0.6,
     ),
 ]
 ESCHER_MODULE_DEFINITIONS = {m.bigg_id: m for m in ESCHER_MODULE_DEFINITION_LIST}

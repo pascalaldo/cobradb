@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from pathlib import Path
 from cobradb.models import *
 from cobradb import settings
 from cobradb.util import scrub_gene_id, get_or_create_data_source, get_or_create, timing
@@ -201,7 +202,10 @@ def load_assembly(assembly_id, assembly_path, chromosome_accessions, session):
         return
     if chromosome_accessions is None:
         chromosome_accessions = []
-    with gzip.open(assembly_path, "rt") as f:
+    open_f = open
+    if Path(assembly_path).suffix == ".gz":
+        open_f = gzip.open
+    with open_f(assembly_path, "rt") as f:
         gb_file = _load_gb_file(f)
         for i, record in enumerate(gb_file):
             if not record.id in chromosome_accessions:
@@ -239,6 +243,7 @@ def load_chromosome(record, genome_db, session):
     if genome_db.organism is None:
         logging.warning(f"Organism: {record.annotations['organism']}")
         genome_db.organism = record.annotations["organism"]
+        session.commit()
 
     bigg_id_warnings = 0
     duplicate_genes_warnings = 0

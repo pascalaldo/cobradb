@@ -10,6 +10,7 @@ from cobradb.collections import update_collection_data
 from cobradb.escher import create_escher_modules
 from cobradb.model_processing import process_model
 from cobradb.seed import push_model_seed_metabolites, push_model_seed_reactions
+from cobradb.workflow import process_model_workflow
 
 os.environ["LIBCHEBIPY_DOWNLOAD_DIR"] = "/chebi"
 import logging
@@ -22,7 +23,7 @@ from cobradb.compartments import load_compartments
 from cobradb.component_loading import load_assembly
 from cobradb.chebi import ChebiEntity, parse_structures
 from cobradb.curated_reactions import load_reactions
-from cobradb.models import *
+from cobradb.models import Session, engine, custom_enums, Base, AlreadyLoadedError
 from cobradb import seed, settings, util
 from cobradb.rhea import load_rhea
 from cobradb.curated_metabolites import load_bigg_ids
@@ -32,6 +33,7 @@ from cobradb.memote import load_memote_results, run_memote
 from cobradb.taxonomy import load_taxonomy
 
 import argparse
+from multiprocessing import Pool
 
 
 parser = argparse.ArgumentParser()
@@ -315,56 +317,16 @@ def main():
         logging.info("Processing models")
         n = len(models_list)
         model_dir = Path(settings.model_directory)
-        for i, model_dict in enumerate(models_list):
-            # if model_dict["filename"] not in [
-            #     "iML1515.json",
-            # ]:
-            #     continue
-            print(model_dict)
-            logging.info(
-                "Processing model ({} of {}) {}".format(
-                    i + 1, n, model_dict["filename"]
-                )
+
+        engine.dispose()
+        with Pool(settings.n_processes) as p:
+            p.starmap(
+                process_model_workflow,
+                [
+                    (model_dir, model_dict["filename"], args.skip_memote)
+                    for model_dict in models_list
+                ],
             )
-            model_bigg_id = None
-            try:
-                model_bigg_id, _model_db_id = process_model(
-                    session,
-                    model_dir / model_dict["filename"],
-                )
-            except Exception as e:
-                print(
-                    f"model_dir: '{model_dir}', model_path: '{model_dir / model_dict['filename']}'"
-                )
-                logging.error("Could not load model %s." % model_dict["filename"])
-                logging.exception(e)
-
-            if not args.skip_memote and model_bigg_id is not None:
-                model_biggr_filename = f"/models/models/{model_bigg_id}.biggr.sbml"
-                memote_result_filename = f"/models/memote/{model_bigg_id}.biggr.json.gz"
-
-                successful_memote_run = False
-                try:
-                    # if not Path(memote_result_filename).exists():
-                    run_memote(model_biggr_filename, memote_result_filename)
-                    successful_memote_run = True
-                except Exception as e:
-                    logging.error("Memote failed to run.")
-                    logging.exception(e)
-
-                if successful_memote_run:
-                    try:
-                        load_memote_results(
-                            model_bigg_id,
-                            memote_result_filename,
-                            session,
-                        )
-                    except Exception as e:
-                        logging.error(
-                            "Could not load memote results %s." % model_dict["filename"]
-                        )
-                        logging.exception(e)
-
         timings["load_models"] = time.time() - f_start_time
 
     timings["total"] = time.time() - start_time
