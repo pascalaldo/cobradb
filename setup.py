@@ -14,20 +14,25 @@ if isfile(requirement_path):
         install_requires = f.read().splitlines()
 
 setup(
-    name='cobradb',
-    version='0.3.0',
+    name="cobradb",
+    version="0.3.0",
     description="""COBRAdb loads genome-scale metabolic models and genome
                    annotations into a relational database.""",
-    url='https://github.com/SBRG/cobradb',
-    author='Zachary King',
-    author_email='zaking@ucsd.edu',
-    license='MIT',
+    url="https://github.com/SBRG/cobradb",
+    author="Zachary King",
+    author_email="zaking@ucsd.edu",
+    license="MIT",
     classifiers=[
-        'License :: OSI Approved :: MIT License',
-        'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.10',
+        "License :: OSI Approved :: MIT License",
+        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.10",
     ],
-    keywords='systems biology, genome-scale model',
+    keywords="systems biology, genome-scale model",
     packages=find_packages(),
+    package_data={
+        "cobradb": [
+            "data/escher_templates/*",
+        ]
+    },
     install_requires=install_requires,
 )

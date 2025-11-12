@@ -1,8 +1,10 @@
 from collections.abc import Mapping
 import gzip
 import json
+import re
 import cobra
 from sqlalchemy import select
+from cobradb.api import utils
 import memote.suite.api as api
 from memote.suite.results import ResultManager
 
@@ -145,6 +147,10 @@ TEST_TYPES = {
     "test_unconserved_metabolites": {"type": "count_metabolite", "field": "data_count"},
 }
 
+MEMOTE_REACTION_REGEX = re.compile(
+    r"^([0-9\.]+ \<\= )?(?P<rname>[_a-zA-Z0-9\:]+)( \<\= [0-9\.]+)?$"
+)
+
 
 def run_memote(model_filename, result_filename):
     config = cobra.Configuration()
@@ -174,9 +180,10 @@ def load_memote_results(model_bigg_id, filename, session):
     with gzip.open(filename, "rb") as f:
         results = json.load(f)
 
-    model_db = session.scalars(
-        select(Model).filter(Model.bigg_id == model_bigg_id).limit(1)
-    ).first()
+    model_db = utils.get_object_by_bigg_id(session, model_bigg_id, Model)
+    if model_db is None:
+        raise ValueError(f"Model {model_bigg_id} could not be found.")
+    model_db_id = model_db.id
 
     existing_result_db = session.scalars(
         select(MemoteResult).filter(MemoteResult.model == model_db).limit(1)
@@ -219,7 +226,7 @@ def load_memote_results(model_bigg_id, filename, session):
             session.commit()
 
         general_result = {
-            "model_id": model_db.id,
+            "model_id": model_db_id,
             "test_id": test_db.id,
         }
         specific_results = {}
@@ -238,32 +245,39 @@ def load_memote_results(model_bigg_id, filename, session):
                 if prop == "data":
                     general_result["data_count"] = len(prop_val)
                 for k in prop_val:
+                    if isinstance(k, list) and len(k) == 1:
+                        k = k[0]
+                    if not isinstance(k, str):
+                        print(f"Key {k} not a string.")
+                        continue
                     if k not in specific_results:
                         specific_results[k] = {
-                            "model_id": model_db.id,
+                            "model_id": model_db_id,
                             "test_id": test_db.id,
                         }
                     if test_type in ["per_reaction", "count_reaction"]:
-                        universal_reaction_id = k
-                        copy_number = 1
-                        if ":" in universal_reaction_id:
-                            universal_reaction_id, copy_number = (
-                                universal_reaction_id.rsplit(":", maxsplit=1)
-                            )
-                            copy_number = int(copy_number)
+                        reaction_match = MEMOTE_REACTION_REGEX.match(k)
+                        if not reaction_match:
+                            universal_reaction_id = k
+                        else:
+                            universal_reaction_id = reaction_match.group("rname")
+                        # copy_number = 1
+                        # if ":" in universal_reaction_id:
+                        #     universal_reaction_id, copy_number = (
+                        #         universal_reaction_id.rsplit(":", maxsplit=1)
+                        #     )
+                        #     copy_number = int(copy_number)
                         model_reaction_db = session.scalars(
                             select(ModelReaction)
-                            .join(ModelReaction.reaction)
                             .join(Reaction.universal_reaction)
                             .filter(
-                                (UniversalReaction.bigg_id == universal_reaction_id)
-                                & (ModelReaction.copy_number == copy_number)
-                                & (ModelReaction.model_id == model_db.id)
+                                (ModelReaction.bigg_id == universal_reaction_id)
+                                & (ModelReaction.model_id == model_db_id)
                             )
                             .limit(1)
                         ).first()
                         if model_reaction_db is None:
-                            print(f"Reaction not found: {k}")
+                            print(f"Reaction not found: {k} ({universal_reaction_id})")
                             continue
                         specific_results[k]["model_reaction_id"] = model_reaction_db.id
                     elif test_type in ["per_metabolite", "count_metabolite"]:
@@ -281,7 +295,7 @@ def load_memote_results(model_bigg_id, filename, session):
                                     )
                                     & (
                                         ModelCompartmentalizedComponent.model_id
-                                        == model_db.id
+                                        == model_db_id
                                     )
                                 )
                                 .limit(1)
@@ -302,7 +316,7 @@ def load_memote_results(model_bigg_id, filename, session):
                                     )
                                     & (
                                         ModelCompartmentalizedComponent.model_id
-                                        == model_db.id
+                                        == model_db_id
                                     )
                                 )
                                 .limit(1)
@@ -330,3 +344,4 @@ def load_memote_results(model_bigg_id, filename, session):
             res_db = MemoteResult(**res)
             session.add(res_db)
         session.commit()
+        session.close()

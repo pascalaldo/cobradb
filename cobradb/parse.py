@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 
+from os import PathLike
+from pathlib import Path
+from typing import Union
 from cobradb.models import NotFoundError
 from cobradb.util import scrub_gene_id, load_tsv, increment_id
 from cobradb import settings
@@ -59,17 +62,17 @@ def hash_reaction(reaction, metabolite_dict, string_only=False, reverse=False):
     return hash_metabolite_dictionary(the_dict, string_only)
 
 
-def load_and_normalize(model_filepath):
+def load_and_normalize(model_filepath: Union[str, PathLike]):
     """Load a model, and give it a particular id style"""
 
-    model_filepath = str(model_filepath)
+    model_filepath = Path(model_filepath)
 
     # load the model
-    if model_filepath.endswith(".xml"):
+    if model_filepath.suffix == ".xml":
         model = cobra.io.read_sbml_model(model_filepath)
-    elif model_filepath.endswith(".mat"):
+    elif model_filepath.suffix == ".mat":
         model = cobra.io.load_matlab_model(model_filepath)
-    elif model_filepath.endswith(".json"):
+    elif model_filepath.suffix == ".json":
         model = cobra.io.load_json_model(model_filepath)
     else:
         raise Exception("The %s file is not a valid filetype", model_filepath)
@@ -103,14 +106,22 @@ def remove_boundary_metabolites(model):
     as the metabolites are deleted.
 
     """
-    for metabolite_id in [str(x) for x in model.metabolites]:
+    boundary_metabolite_ids = [
+        mid for x in model.metabolites if (mid := x.id).endswith("_b")
+    ]
+    for metabolite_id in boundary_metabolite_ids:
         metabolite = model.metabolites.get_by_id(metabolite_id)
-        if not metabolite.id.endswith("_b"):
-            continue
+
+        remove_metabolite = False
         for reaction in list(metabolite._reaction):
             if reaction.id.startswith("EX_"):
-                metabolite.remove_from_model()
-                break
+                remove_metabolite = True
+                if len(reaction.metabolites) == 1:
+                    reaction.remove_from_model()
+
+        if remove_metabolite:
+            print(f"Removing metabolite {metabolite_id} from model {model.id}.")
+            metabolite.remove_from_model()
     model.metabolites._generate_index()
 
 
@@ -367,9 +378,9 @@ def convert_ids(model):
                 while new_id in model.metabolites:
                     new_id = increment_id(new_id)
             metabolite.id = new_id
-    for metabolite in model.metabolites:
-        # Create temporary, model-specific identifiers
-        metabolite.id = f"__{model.id}__{metabolite.id}"
+    # for metabolite in model.metabolites:
+    #     # Create temporary, model-specific identifiers
+    #     metabolite.id = f"__{model.id}__{metabolite.id}"
     model.metabolites._generate_index()
 
     # take out the _b metabolites
@@ -408,9 +419,9 @@ def convert_ids(model):
         reaction.gene_reaction_rule = _check_rule_prefs(
             rule_prefs, reaction.gene_reaction_rule
         )
-    for reaction in model.reactions:
-        # Create temporary, model-specific identifiers
-        reaction.id = f"__{model.id}__{reaction.id}"
+    # for reaction in model.reactions:
+    #     # Create temporary, model-specific identifiers
+    #     reaction.id = f"__{model.id}__{reaction.id}"
     model.reactions._generate_index()
 
     # update the genes

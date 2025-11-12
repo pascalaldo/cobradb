@@ -254,7 +254,17 @@ def push_model_seed_metabolites(modelseed_db, session):
                 bigg_id_match=bigg_id_match,
                 inchi_match=inchi_match,
             )
-            annotation_db.component_mappings.append(annotation_mapping)
+            found_match = False
+            for cmap in annotation_db.component_mappings:
+                if (
+                    (cmap.component_id == annotation_mapping.component_id)
+                    and (cmap.bigg_id_match == annotation_mapping.bigg_id_match)
+                    and (cmap.inchi_match == annotation_mapping.inchi_match)
+                ):
+                    found_match = True
+                    break
+            if not found_match:
+                annotation_db.component_mappings.append(annotation_mapping)
     session.commit()
 
 
@@ -424,5 +434,16 @@ def push_model_seed_reactions(modelseed_db, session):
                 bigg_id_match=bigg_id_match,
                 pattern_match=pattern_match,
             )
-            annotation_db.reaction_mappings.append(annotation_mapping)
+
+            found_match = False
+            for rmap in annotation_db.reaction_mappings:
+                if (
+                    (rmap.reaction_id == annotation_mapping.reaction_id)
+                    and (rmap.bigg_id_match == annotation_mapping.bigg_id_match)
+                    and (rmap.pattern_match == annotation_mapping.pattern_match)
+                ):
+                    found_match = True
+                    break
+            if not found_match:
+                annotation_db.reaction_mappings.append(annotation_mapping)
     session.commit()
