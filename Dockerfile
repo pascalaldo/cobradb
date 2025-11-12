@@ -24,6 +24,7 @@ RUN python setup.py install
 #COPY settings.ini /app/settings.ini
 #COPY settings.small.ini /app/settings.ini
 
+CMD ["bin/new_load_db", "--drop-all", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-collections", "--skip-maps", "--skip-model-processing"]
 # CMD ["bin/new_load_db", "--drop-all"]
 # CMD ["bin/new_load_db", "--drop-all", "--skip-genomes", "--skip-curated-reactions", "--skip-models"]
 # CMD ["bin/new_load_db", "--skip-genomes"]
@@ -31,7 +32,7 @@ RUN python setup.py install
 # CMD ["bin/new_load_db", "--skip-rhea", "--skip-curated-metabolites"]
 # CMD ["bin/new_load_db", "--drop-models", "--skip-compartments", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-taxonomy", "--skip-genomes"]
 # CMD ["bin/new_load_db", "--skip-compartments", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-taxonomy", "--skip-genomes", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-model-processing"]
-CMD ["bin/new_load_db", "--skip-compartments", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-taxonomy", "--skip-genomes", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-model-processing", "--skip-collections", "--drop-maps"]
+# CMD ["bin/new_load_db", "--skip-compartments", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-taxonomy", "--skip-genomes", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-collections", "--skip-maps"]
 # CMD ["bin/new_load_db", "--drop-models", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-genomes", "--skip-seed-metabolites", "--skip-seed-reactions"]
 # CMD ["bin/new_load_db", "--skip-genomes", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-compartments", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions"]
 # CMD ["bin/new_load_db", "--skip-genomes", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-compartments", "--skip-models"]

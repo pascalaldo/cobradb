@@ -30,6 +30,7 @@ from sqlalchemy.orm import (
     mapped_column,
     relationship as orm_relationship,
     sessionmaker,
+    scoped_session,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
 
@@ -48,7 +49,8 @@ def relationship(*args, **kwargs):
 # Connect to postgres
 engine = create_engine(settings.db_connection_string)
 metadata = MetaData()
-Session = sessionmaker(bind=engine)
+session_factory = sessionmaker(bind=engine)
+Session = scoped_session(session_factory)
 
 HASH_STR_MAX_LEN = 5000
 # Make the enums
