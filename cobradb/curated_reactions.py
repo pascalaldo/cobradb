@@ -108,10 +108,13 @@ def parse_reaction_participants(
 
 @timing
 def push_reactions(session: Session, data):
+    logging.warning("function push reaction")
     for n, (bigg_id, reaction_data) in enumerate(data.items()):
         reaction_participants = parse_reaction_participants(
             session, reaction_data["participants"]
         )
+
+        logging.warning(f"reaction participants: {reaction_participants}")
         if reaction_participants is None:
             # logging.error(
             #     f"Could not parse reaction participants for '{bigg_id}' ({reaction_data['participants']})"
@@ -127,6 +130,8 @@ def push_reactions(session: Session, data):
                 .filter(ModelCollection.bigg_id == reaction_collection_bigg_id)
                 .limit(1)
             ).first()
+
+        logging.warning(f"reaction collection: {reaction_collection}")
 
         if reaction_collection is None:
             collection_cond = lambda x: x.collection_id == None
@@ -161,6 +166,7 @@ def push_reactions(session: Session, data):
             continue
 
         reaction_hash = Reaction.generate_hash(reaction_participants)
+        logging.warning(f"Reaction hash: {reaction_hash}")
 
         # Get the reaction
         reaction_db = session.scalars(
@@ -171,18 +177,21 @@ def push_reactions(session: Session, data):
             .limit(1)
         ).first()
 
+        logging.warning(f"reaction_db: {reaction_db}")
         if reaction_db is not None:
-            # logging.warning(
-            #     f"Reaction '{bigg_id}' already in database as '{reaction_db.bigg_id}', skipping."
-            # )
+            logging.warning(
+                f"Reaction '{bigg_id}' already in database as '{reaction_db.bigg_id}', skipping."
+            )
             continue
 
         universal_participants = reactions.get_universal_reaction_participants_list(
             session, reaction_participants
         )
+        logging.warning(f"universal participants: {universal_participants}")
         universal_reaction_hash = UniversalReaction.generate_hash(
             universal_participants
         )
+        logging.warning(f"universal hash: {universal_reaction_hash}")
         universal_reaction_db = session.scalars(
             select(UniversalReaction)
             .filter(UniversalReaction.hash == universal_reaction_hash)
@@ -190,13 +199,16 @@ def push_reactions(session: Session, data):
             .limit(1)
         ).first()
 
+        logging.warning(f"universal reaction_db: {universal_reaction_db}")
         if universal_reaction_db is None:
+            logging.warning("get_or_create_universal_reaction")
             universal_reaction_db = reactions.get_or_create_universal_reaction(
                 session,
                 bigg_id,
                 universal_participants,
             )
             session.commit()
+        logging.warning(f"universal reaction_db: {universal_reaction_db}")
         reaction_db = reactions.get_or_create_reaction_for_universal_reaction(
             session, universal_reaction_db, reaction_participants
         )

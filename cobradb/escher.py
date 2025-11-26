@@ -22,13 +22,15 @@ def create_escher_modules(session: Session):
         model_reactions = session.scalars(
             select(ModelReaction)
             .options(
-                joinedload(ModelReaction.reaction)
-                .subqueryload(Reaction.matrix)
-                .joinedload(ReactionMatrix.compartmentalized_component)
-                .subqueryload(
-                    CompartmentalizedComponent.model_compartmentalized_components.and_(
-                        ModelCompartmentalizedComponent.model_id == model_db.id
-                    )
+                joinedload(ModelReaction.reaction).options(
+                    joinedload(Reaction.universal_reaction),
+                    subqueryload(Reaction.matrix)
+                    .joinedload(ReactionMatrix.compartmentalized_component)
+                    .subqueryload(
+                        CompartmentalizedComponent.model_compartmentalized_components.and_(
+                            ModelCompartmentalizedComponent.model_id == model_db.id
+                        )
+                    ),
                 )
             )
             .filter(ModelReaction.model_id == model_db.id)
@@ -42,6 +44,7 @@ def create_escher_modules(session: Session):
                 session, model_reactions
             )
             print(f"Selected reactions: {len(selected_reactions)}")
+            logging.warning([x.bigg_id for x in selected_reactions])
 
             for r in selected_reactions:
                 r.escher_mappings.append(

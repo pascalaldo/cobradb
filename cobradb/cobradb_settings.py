@@ -71,17 +71,6 @@ class CobraDBSettings:
         else:
             print("No Java executable provided.")
 
-        # get the java executable (optional, for running Model Polisher)
-        if config.has_option("EXECUTABLES", "java"):
-            self.java = config.get("EXECUTABLES", "java")
-        else:
-            print("No Java executable provided.")
-
-        if config.has_option("EXECUTABLES", "model_polisher"):
-            self.model_polisher = config.get("EXECUTABLES", "model_polisher")
-        else:
-            print("No ModelPolisher JAR path provided.")
-
         if not config.has_section("DATA"):
             raise Exception("DATA section was not found in settings.ini")
 

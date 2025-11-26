@@ -1,9 +1,11 @@
 import logging
 from pathlib import Path
+from typing import List, Optional
 
+from cobradb.component_loading import load_assembly
 from cobradb.memote import load_memote_results, run_memote
 from cobradb.model_processing import process_model
-from cobradb.models import Session
+from cobradb.models import AlreadyLoadedError, Session
 
 
 def process_model_workflow(
@@ -46,3 +48,22 @@ def process_model_workflow(
                 except Exception as e:
                     logging.error("Could not load memote results %s." % model_filename)
                     logging.exception(e)
+
+
+def load_genomes_workflow(
+    assembly_id: str, assembly_path: Path, chromosome_accessions: Optional[List[str]]
+):
+    logging.info(f"Loading assembly {assembly_id}")
+    with Session() as session:
+        try:
+            load_assembly(
+                assembly_id=assembly_id,
+                assembly_path=assembly_path,
+                chromosome_accessions=chromosome_accessions,
+                session=session,
+            )
+            session.commit()
+        except AlreadyLoadedError as e:
+            logging.info(str(e))
+        except Exception as e:
+            logging.exception(e)

@@ -23,10 +23,13 @@ from sqlalchemy import (
     DateTime,
     UniqueConstraint,
     func,
+    or_,
+    select,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
     Mapped,
+    column_property,
     mapped_column,
     relationship as orm_relationship,
     sessionmaker,
@@ -287,6 +290,7 @@ class Genome(Base):
     organism: Mapped[Optional[str]]
     taxon_id: Mapped[Optional[int]] = mapped_column(ForeignKey("taxon.id"))
     taxon: Mapped[Optional[Taxon]] = relationship(back_populates="genomes")
+    strain: Mapped[Optional[str]]
     ncbi_assembly_id: Mapped[Optional[str]]
 
     chromosomes: Mapped[List["Chromosome"]] = relationship(back_populates="genome")
@@ -570,6 +574,8 @@ class Annotation(Base, BiGGBase):
     type = mapped_column(custom_enums["annotation_type"])
     default_data_source_id: Mapped[int] = mapped_column(ForeignKey(DataSource.id))
     default_data_source: Mapped[DataSource] = relationship(back_populates="annotations")
+
+    is_obsolete: Mapped[bool] = mapped_column(default=False)
 
     properties: Mapped[List["AnnotationProperty"]] = relationship(
         back_populates="annotation"
@@ -1284,10 +1290,7 @@ class ReferenceReaction(Base, BiGGBase):
                     rc_id = rc.bigg_id
                 coefficient = str(p["coefficient"]).lower()
             elif isinstance(p, ReferenceReactionParticipant):
-                if p.compound_id is None:
-                    rc_id = p.compound.id
-                else:
-                    rc_id = p.compound_id
+                rc_id = p.compound.bigg_id
                 coefficient = p.coefficient
             else:
                 rc_id = p.reference_compound.bigg_id
@@ -1401,6 +1404,10 @@ class UniversalReaction(Base, BiGGBase):
                 _model, bare_id = bare_id.split("__", maxsplit=1)
             else:
                 bare_id = str(self.id)
+
+        if reference is not None:
+            if reference.bigg_id == "BiGGr:BIOMASS":
+                return "SBO:0000629"
         if self.is_exchange:
             return "SBO:0000627"
         if self.is_transport:
@@ -1409,10 +1416,6 @@ class UniversalReaction(Base, BiGGBase):
             return "SBO:0000632"
         if bare_id.startswith("DM_"):
             return "SBO:0000628"
-        if reference is not None:
-            if reference.bigg_id == "BiGGr:BIOMASS":
-                return "SBO:0000629"
-
         return "SBO:0000176"
 
     def __repr__(self):
@@ -1709,3 +1712,50 @@ class ModelReactionEscherMapping(Base):
     )
 
     __table_args__ = (UniqueConstraint("model_reaction_id", "escher_module_id"),)
+
+
+_REACTION_ALL_ANN_SUBQ = (
+    select(
+        Reaction.id,
+        ReferenceReactionAnnotationMapping.annotation_id.label("ann_id"),
+    )
+    .join(Reaction.universal_reaction)
+    .join(UniversalReaction.reference)
+    .join(ReferenceReaction.annotation_mappings)
+    .cte()
+).union(
+    select(
+        Reaction.id,
+        ReactionAnnotationMapping.annotation_id.label("ann_id"),
+    ).join(Reaction.annotation_mappings)
+)
+Reaction.all_annotations = relationship(
+    "Annotation",
+    primaryjoin=(Reaction.id == _REACTION_ALL_ANN_SUBQ.c.id),
+    secondary=_REACTION_ALL_ANN_SUBQ,
+    secondaryjoin=(_REACTION_ALL_ANN_SUBQ.c.ann_id == Annotation.id),
+    viewonly=True,
+)
+
+_COMPONENT_ALL_ANN_SUBQ = (
+    select(
+        Component.id,
+        ReferenceCompoundAnnotationMapping.annotation_id.label("ann_id"),
+    )
+    .join(Component.reference_mappings)
+    .join(ComponentReferenceMapping.reference_compound)
+    .join(ReferenceCompound.annotation_mappings)
+    .cte()
+).union(
+    select(
+        Component.id,
+        ComponentAnnotationMapping.annotation_id.label("ann_id"),
+    ).join(Component.annotation_mappings)
+)
+Component.all_annotations = relationship(
+    "Annotation",
+    primaryjoin=(Component.id == _COMPONENT_ALL_ANN_SUBQ.c.id),
+    secondary=_COMPONENT_ALL_ANN_SUBQ,
+    secondaryjoin=(_COMPONENT_ALL_ANN_SUBQ.c.ann_id == Annotation.id),
+    viewonly=True,
+)

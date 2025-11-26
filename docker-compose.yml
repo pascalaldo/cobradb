@@ -17,7 +17,9 @@ services:
       - /data/biggr-genbank:/genbank
       - /data/biggr-assemblies:/assemblies
       - /data/biggr-bigg-models:/models
+      - /data/biggr-input-models:/input_models
       - /data/biggr-chebi-cache:/chebi
+      - /data/biggr-datafiles:/datafiles
     stdin_open: true
     tty: true
   biggr-db:

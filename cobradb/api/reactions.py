@@ -441,6 +441,7 @@ def find_reference_reaction(
     hash_pattern = ReferenceReaction.generate_hash(
         reference_reaction_participants, pattern=True
     )
+    logging.warning(f"hash pattern: {hash_pattern}")
 
     db_entries = session.scalars(
         select(ReferenceReaction).where(
@@ -448,6 +449,7 @@ def find_reference_reaction(
         )
     ).all()
 
+    logging.warning(f"db entries: {db_entries}")
     if not db_entries:
         return None, None
     db_entries = list(db_entries)
@@ -458,6 +460,7 @@ def find_reference_reaction(
         m = match_reference_reaction_participants_with_reference_reaction(
             session, reference_reaction_participants, db_entry
         )
+        print(f"match: {m}")
         # print(m)
         if m is not None:
             reference_db, mapping = db_entry, m
@@ -494,10 +497,20 @@ def get_or_create_universal_reaction(
     reference_reaction_participants = get_reference_reaction_participants_list(
         session, universal_reaction_participants
     )
+    logging.warning(
+        f"reference reaction participants: {reference_reaction_participants}"
+    )
     if reference_reaction_participants is not None:
+        logging.warning("find_reference_reaction")
         reference_db, reference_reaction_participants = find_reference_reaction(
             session, reference_reaction_participants
         )
+    logging.warning(f"reference_db: {reference_db}")
+
+    if reaction_collection_id is None and exchange_reaction:
+        reaction_collection_id = universal_reaction_participants[
+            0
+        ].universal_compartmentalized_component.universal_component.collection_id
 
     if reaction_collection_id is None:
         reaction_collection = None

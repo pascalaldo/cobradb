@@ -95,21 +95,30 @@ def load_model_assemblies_json(
         model_entry["pub_ref"] = pub_ref
 
         model_assembly = model_entry.get("assembly")
-        if model_assembly is not None and model_assembly not in assemblies:
-            assembly_file = (
-                Path(refseq_dir)
-                / "ncbi_dataset"
-                / "data"
-                / model_assembly
-                / "genomic.gbff"
-            )
-            if (gz_file := assembly_file.with_suffix(".gbff.gz")).is_file():
-                assemblies[model_assembly] = str(gz_file)
-            elif assembly_file.is_file():
-                assemblies[model_assembly] = str(assembly_file)
+        if model_assembly is not None:
+            if ":" in model_assembly:
+                model_assembly = tuple(model_assembly.split(":", maxsplit=1))
             else:
-                print(f"Assembly file not found: {assembly_file}")
+                model_assembly = ("ncbi_assembly", model_assembly)
+        if model_assembly is not None and model_assembly not in assemblies:
+            if model_assembly[0] == "ncbi_assembly":
+                assembly_file = (
+                    Path(refseq_dir)
+                    / "ncbi_dataset"
+                    / "data"
+                    / model_assembly[1]
+                    / "genomic.gbff"
+                )
+                if (gz_file := assembly_file.with_suffix(".gbff.gz")).is_file():
+                    assemblies[model_assembly] = str(gz_file)
+                elif assembly_file.is_file():
+                    assemblies[model_assembly] = str(assembly_file)
+                else:
+                    print(f"Assembly file not found: {assembly_file}")
+                    assemblies[model_assembly] = None
+            elif model_assembly[0] == "pankb_assembly":
                 assemblies[model_assembly] = None
+
         model_entry["assembly"] = model_assembly
 
         model_chromosomes = model_entry.get("chromosomes", [])
@@ -275,6 +284,10 @@ def load_model(
     else:
         full_path = Path(model_dir) / model_data["filename"]
     model, old_parsed_ids = parse.load_and_normalize(full_path)
+
+    if model_data.get("prefix") is not None:
+        model.id = f"{model_data['prefix']}{model.id}"
+
     model_bigg_id = model.id
 
     # check that the model doesn't already exist
@@ -296,8 +309,8 @@ def load_model(
     if (assembly := model_data.get("assembly")) is not None:
         genome_db = session.scalars(
             select(Genome)
-            .filter(Genome.accession_type == "ncbi_assembly")
-            .filter(Genome.accession_value == assembly)
+            .filter(Genome.accession_type == assembly[0])
+            .filter(Genome.accession_value == assembly[1])
             .limit(1)
         ).first()
         if genome_db is None:

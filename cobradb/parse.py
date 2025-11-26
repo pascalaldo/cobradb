@@ -389,6 +389,14 @@ def convert_ids(model):
     # load fixes for gene_reaction_rule's
     rule_prefs = _get_rule_prefs()
 
+    reactions_to_remove = []
+    for reaction in model.reactions:
+        if not reaction.metabolites:
+            logging.warning(f"Reaction {reaction.id} is empty, removing.")
+            reactions_to_remove.append(reaction)
+    for reaction in reactions_to_remove:
+        reaction.remove_from_model()
+
     # separate ids and compartments, and convert to the new_id_style
     for reaction in model.reactions:
         # apply new id style

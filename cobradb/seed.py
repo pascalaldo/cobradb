@@ -204,6 +204,9 @@ def push_model_seed_metabolites(modelseed_db, session):
                     continue
                 if isinstance(prop_val, int) and property.startswith("is_"):
                     prop_val = bool(prop_val)
+                if property == "is_obsolete":
+                    annotation_db.is_obsolete = bool(prop_val)
+                    continue
                 prop_db = AnnotationProperty(key=property)
                 prop_db.value = prop_val
                 annotation_db.properties.append(prop_db)
@@ -386,6 +389,8 @@ def push_model_seed_reactions(modelseed_db, session):
                     continue
                 if isinstance(prop_val, int) and property.startswith("is_"):
                     prop_val = bool(prop_val)
+                if property == "is_obsolete":
+                    annotation_db.is_obsolete = bool(prop_val)
                 prop_db = AnnotationProperty(key=property)
                 prop_db.value = prop_val
                 annotation_db.properties.append(prop_db)
