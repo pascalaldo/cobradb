@@ -1,19 +1,13 @@
 # -*- coding: utf-8 -*-
 
 from pathlib import Path
-from cobradb.models import *
-from cobradb import settings
+from typing import List, Set
+from cobradb.models import AlreadyLoadedError, Gene, Genome, Chromosome, Synonym
 from cobradb.util import scrub_gene_id, get_or_create_data_source, get_or_create, timing
 
-import sys, os, math, re
-from os.path import basename
-from warnings import warn
-from sqlalchemy import select, text, or_, and_, func
+from sqlalchemy import select, func
 import logging
-import six
-import itertools as it
 import gzip
-import time
 
 
 class BadGenomeError(Exception):
@@ -41,128 +35,53 @@ def _load_gb_file(genbank_file_handle):
     except Exception as e:
         raise BadGenomeError(
             'BioPython failed to parse %s with error "%s"'
-            % (genbank_file_handle.name, e.message)
+            % (genbank_file_handle.name, getattr(e, "message", "?"))
         )
     return gb_file
 
 
-def get_genbank_accessions(genbank_filepath, fast=False):
-    """Load the file and return the NCBI Accession and Assembly IDs (if available).
-
-    Returns a dictionary of accessions with keys: 'ncbi_accession',
-    'ncbi_assembly', 'ncbi_bioproject'.
-
-    Arguments
-    ---------
-
-    genbank_filepath: The path to the genbank file.
-
-    fast: If True, then only look in the first 100 lines. Faster because we do
-    not load the whole file.
-
-    """
-    out = {"ncbi_assembly": None, "ncbi_accession": None, "ncbi_bioproject": None}
-
-    if fast:
-        # try to find the BioProject ID in the first 100 lines. Otherwise, use
-        # the full SeqIO.read
-        line_limit = 100
-        regex_dict = {
-            k: re.compile(v)
-            for k, v in six.iteritems(
-                {
-                    "ncbi_accession": r"VERSION\s+([\w.-]+)[^\w.-]",
-                    "ncbi_assembly": r"Assembly:\s*([\w.-]+)[^\w.-]",
-                    "ncbi_bioproject": r"BioProject:\s*([\w.-]+)[^\w.-]",
-                }
-            )
-        }
-        with open(genbank_filepath, "r") as f:
-            for i, line in enumerate(f.readlines()):
-                for key, regex in six.iteritems(regex_dict):
-                    match = regex.search(line)
-                    if match is not None:
-                        out[key] = match.group(1)
-                if i > line_limit:
-                    break
-    else:
-        # load the genbank file
-        with open(genbank_filepath, "r") as f:
-            gb_file = _load_gb_file(f)
-            out["ncbi_accession"] = gb_file.id
-            for value in it.chain.from_iterable(x.split() for x in gb_file.dbxrefs):
-                if "Assembly" in value:
-                    out["ncbi_assembly"] = value.split(":")[1]
-                if "BioProject" in value:
-                    out["ncbi_bioproject"] = value.split(":")[1]
-
-    return out
-
-
-def load_gene_synonym(session, gene_db, synonym, data_source_id):
-    """Load the synonym for this gene from the given genome."""
-    data_source_id = get_or_create_data_source(session, data_source_id)
-    synonym_db, _ = get_or_create(
-        session,
-        Synonym,
-        type="gene",
-        ome_id=gene_db.id,
-        synonym=synonym,
-        data_source_id=data_source_id,
-    )
-    return synonym_db.id
-
-
-def collect_gene_synonym(synonym_collection, gene_db, synonym, data_source_id):
+def collect_gene_synonym(synonym_collection, gene_db_id, synonym, data_source_id):
     if not data_source_id in synonym_collection:
         synonym_collection[data_source_id] = set()
-    synonym_collection[data_source_id].add((synonym, gene_db))
+    synonym_collection[data_source_id].add((synonym, gene_db_id))
 
 
 def insert_synonyms(session, synonym_collection):
-    from sqlalchemy.dialects.postgresql import insert
-
     # syns = []
     for data_source_id, synonyms in synonym_collection.items():
         data_source_db = get_or_create_data_source(session, data_source_id)
-        for syn, gene_db in synonyms:
+        for syn, gene_db_id in synonyms:
             synonym = Synonym(
                 type="gene",
-                ome_id=gene_db.id,
+                ome_id=gene_db_id,
                 synonym=syn,
             )
             data_source_db.synonyms.append(synonym)
-    # stmt = insert(Synonym).values(syns)
-    # stmt = stmt.on_conflict_do_nothing(
-    #     index_elements=[
-    #         Synonym.type,
-    #         Synonym.ome_id,
-    #         Synonym.synonym,
-    #         Synonym.data_source,
-    #     ]
-    # )
-    # session.execute(stmt)
-    # session.commit()
 
 
-def _get_qual(feat, name, get_first=False):
+def _nonempty_str(s):
+    s = s.strip()
+    return None if s == "" else s
+
+
+def _get_qual(feat, name):
     """Get a non-null attribute from the feature."""
     try:
         qual = feat.qualifiers[name]
     except KeyError:
-        if get_first:
-            return None
-        else:
-            return []
+        return []
 
-    def nonempty_str(s):
-        s = s.strip()
-        return None if s == "" else s
+    return [y for y in (_nonempty_str(x) for x in qual) if y is not None]
 
-    if get_first:
-        return nonempty_str(qual[0])
-    else:
-        return [y for y in (nonempty_str(x) for x in qual) if y is not None]
+
+def _get_first_qual(feat, name):
+    """Get a non-null attribute from the feature."""
+    try:
+        qual = feat.qualifiers[name]
+    except KeyError:
+        return None
+
+    return _nonempty_str(qual[0])
 
 
 def _get_geneid(feature):
@@ -181,39 +100,44 @@ def _get_geneid(feature):
 def load_assembly(assembly_id, assembly_path, chromosome_accessions, session):
     """Load the genome and chromosomes."""
 
+    accession_type, accession_value = assembly_id
+
     # check that the genome doesn't already exist
     if (
         session.scalar(
             select(func.count(Genome.id))
-            .filter(Genome.accession_type == "ncbi_assembly")
-            .filter(Genome.accession_value == assembly_id)
+            .filter(Genome.accession_type == accession_type)
+            .filter(Genome.accession_value == accession_value)
         )
         > 0
     ):
         raise AlreadyLoadedError(f"Assembly {assembly_id} already loaded")
 
     logging.debug(f"Adding new genome: {assembly_id}")
-    genome_db = Genome(accession_type="ncbi_assembly", accession_value=assembly_id)
+    genome_db = Genome(accession_type=accession_type, accession_value=accession_value)
     session.add(genome_db)
-    # session.commit()
+    session.commit()
+    genome_db_id = genome_db.id
 
     if assembly_path is None:
         logging.warning(f"No assembly file found for {assembly_id}")
         return
-    if chromosome_accessions is None:
-        chromosome_accessions = []
     open_f = open
     if Path(assembly_path).suffix == ".gz":
         open_f = gzip.open
     with open_f(assembly_path, "rt") as f:
         gb_file = _load_gb_file(f)
         for i, record in enumerate(gb_file):
-            if not record.id in chromosome_accessions:
+            if (
+                chromosome_accessions is not None
+                and record.id not in chromosome_accessions
+            ):
                 logging.warning(f"Skipping chromosome [{i+1} of ?] {record.id}")
                 continue
             logging.info(f"Loading chromosome [{i+1} of ?] {record.id}")
-            load_chromosome(record, genome_db, session)
+            load_chromosome(session, record, genome_db_id)
     session.commit()
+    session.close()
 
 
 def first_uppercase(val):
@@ -223,19 +147,19 @@ def first_uppercase(val):
 
 
 @timing
-def load_chromosome(record, genome_db, session):
-    chromosome_db = None
-    if genome_db.id is not None:
-        chromosome_db = session.scalars(
-            select(Chromosome)
-            .filter(Chromosome.ncbi_accession == record.id)
-            .filter(Chromosome.genome_id == genome_db.id)
-            .limit(1)
-        ).first()
+def load_chromosome(session, record, genome_db_id: int):
+    genome_db = session.get(Genome, genome_db_id)
+    chromosome_db = session.scalars(
+        select(Chromosome)
+        .filter(Chromosome.ncbi_accession == record.id)
+        .filter(Chromosome.genome_id == genome_db.id)
+        .limit(1)
+    ).first()
     if not chromosome_db:
         logging.debug("Loading new chromosome: {}".format(record.id))
         chromosome_db = Chromosome(ncbi_accession=record.id)
         genome_db.chromosomes.append(chromosome_db)
+        session.commit()
     else:
         logging.debug("Chromosome already loaded: %s" % record.id)
 
@@ -249,15 +173,26 @@ def load_chromosome(record, genome_db, session):
     duplicate_genes_warnings = 0
     warning_num = 5
     synonym_collection = {}
-    added_gene_bigg_ids = {}
+    added_bigg_ids = set(
+        session.scalars(
+            select(Gene.bigg_id).filter(Gene.chromosome_id == chromosome_db.id)
+        ).all()
+    )
     for i, feature in enumerate(record.features):
         # update genome with the source information
-        if genome_db.taxon_id is None and feature.type == "source":
-            for ref in _get_qual(feature, "db_xref"):
-                if "taxon" == ref.split(":")[0]:
-                    genome_db.taxon_id = int(ref.split(":")[1])
-                    break
-            continue
+        if feature.type == "source":
+            if genome_db.strain is None:
+                strain = _get_first_qual(feature, "strain")
+                if strain is not None:
+                    genome_db.strain = strain
+            if genome_db.taxon_id is None:
+                db_xref = _get_qual(feature, "db_xref")
+                if db_xref is not None:
+                    for ref in db_xref:
+                        if "taxon" == ref.split(":")[0]:
+                            genome_db.taxon_id = int(ref.split(":")[1])
+                            break
+            session.commit()
 
         # only read in CDSs
         if feature.type != "CDS":
@@ -270,7 +205,7 @@ def load_chromosome(record, genome_db, session):
         locus_tag = None
 
         # get bigg_id if possible from locus_tag or and GeneID
-        found_tag = _get_qual(feature, "locus_tag", True)
+        found_tag = _get_first_qual(feature, "locus_tag")
         found_gene_id = _get_geneid(feature)
         if found_tag is not None:
             locus_tag = found_tag
@@ -279,7 +214,7 @@ def load_chromosome(record, genome_db, session):
             bigg_id = scrub_gene_id(found_gene_id)
 
         # get name
-        found_name = _get_qual(feature, "gene", True)
+        found_name = _get_first_qual(feature, "gene")
         if found_name is not None:
             gene_name = found_name
             refseq_name = found_name
@@ -306,17 +241,24 @@ def load_chromosome(record, genome_db, session):
             continue
 
         gene_db = None
-        if bigg_id in added_gene_bigg_ids:
-            gene_db = added_gene_bigg_ids[bigg_id]
-        elif chromosome_db.id is not None:
+        if bigg_id in added_bigg_ids:
+            if duplicate_genes_warnings <= warning_num:
+                msg = "Duplicate genes %s on chromosome %s" % (
+                    bigg_id,
+                    chromosome_db.ncbi_accession,
+                )
+                if duplicate_genes_warnings == warning_num:
+                    msg += " (Warnings limited to %d)" % warning_num
+                logging.warning(msg)
+                duplicate_genes_warnings += 1
+
             gene_db = session.scalars(
                 select(Gene)
                 .filter(Gene.bigg_id == bigg_id)
                 .filter(Gene.chromosome_id == chromosome_db.id)
                 .limit(1)
             ).first()
-
-        if gene_db is None:
+        else:
             # get the strand and positions
             strand = None
             if feature.location.strand == 1:
@@ -342,54 +284,43 @@ def load_chromosome(record, genome_db, session):
                 dna_sequence=dna_sequence,
                 protein_sequence=protein_sequence,
                 mapped_to_genbank=True,
+                chromosome_id=chromosome_db.id,
             )
-            chromosome_db.genome_regions.append(gene_db)
-            added_gene_bigg_ids[bigg_id] = gene_db
+            session.add(gene_db)
+            session.commit()
+            added_bigg_ids.add(bigg_id)
 
-        else:
-            # warn about duplicate genes.
-            #
-            # TODO The only downside to loading CDS's this way is that the
-            # leftpos and rightpos correspond to a CDS, not the whole gene. So
-            # these need to be fixed eventually.
-            if duplicate_genes_warnings <= warning_num:
-                msg = "Duplicate genes %s on chromosome %s" % (
-                    bigg_id,
-                    chromosome_db.ncbi_accession,
-                )
-                if duplicate_genes_warnings == warning_num:
-                    msg += " (Warnings limited to %d)" % warning_num
-                logging.warning(msg)
-                duplicate_genes_warnings += 1
-
-        # synonym_collection = {}
+        gene_db_id = gene_db.id
+        # session.expunge(gene_db)
         # load the synonyms for the gene
         if locus_tag is not None:
             collect_gene_synonym(
-                synonym_collection, gene_db, locus_tag, "refseq_locus_tag"
+                synonym_collection, gene_db_id, locus_tag, "refseq_locus_tag"
             )
 
         if refseq_name is not None:
             collect_gene_synonym(
-                synonym_collection, gene_db, refseq_name, "refseq_name"
+                synonym_collection, gene_db_id, refseq_name, "refseq_name"
             )
 
         for ref in _get_qual(feature, "gene_synonym"):
             synonyms = [x.strip() for x in ref.split(";")]
             for syn in synonyms:
-                collect_gene_synonym(synonym_collection, gene_db, syn, "refseq_synonym")
+                collect_gene_synonym(
+                    synonym_collection, gene_db_id, syn, "refseq_synonym"
+                )
 
         for ref in _get_qual(feature, "db_xref"):
             splitrefs = [x.strip() for x in ref.split(":")]
             if len(splitrefs) == 2:
                 collect_gene_synonym(
-                    synonym_collection, gene_db, splitrefs[1], splitrefs[0]
+                    synonym_collection, gene_db_id, splitrefs[1], splitrefs[0]
                 )
 
         for ref in _get_qual(feature, "old_locus_tag"):
             for syn in [x.strip() for x in ref.split(";")]:
                 collect_gene_synonym(
-                    synonym_collection, gene_db, syn, "refseq_old_locus_tag"
+                    synonym_collection, gene_db_id, syn, "refseq_old_locus_tag"
                 )
 
         for ref in _get_qual(feature, "note"):
@@ -397,8 +328,10 @@ def load_chromosome(record, genome_db, session):
                 sp = value.split(":")
                 if len(sp) == 2 and sp[0] == "ORF_ID":
                     collect_gene_synonym(
-                        synonym_collection, gene_db, sp[1], "refseq_orf_id"
+                        synonym_collection, gene_db_id, sp[1], "refseq_orf_id"
                     )
     session.commit()
+    session.close()
     insert_synonyms(session, synonym_collection)
     session.commit()
+    session.close()

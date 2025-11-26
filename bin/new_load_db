@@ -4,13 +4,12 @@
 # setup.
 import os
 import shutil
-
+import cProfile
 
 from cobradb.collections import update_collection_data
 from cobradb.escher import create_escher_modules
-from cobradb.model_processing import process_model
 from cobradb.seed import push_model_seed_metabolites, push_model_seed_reactions
-from cobradb.workflow import process_model_workflow
+from cobradb.workflow import load_genomes_workflow, process_model_workflow
 
 os.environ["LIBCHEBIPY_DOWNLOAD_DIR"] = "/chebi"
 import logging
@@ -24,12 +23,11 @@ from cobradb.component_loading import load_assembly
 from cobradb.chebi import ChebiEntity, parse_structures
 from cobradb.curated_reactions import load_reactions
 from cobradb.models import Session, engine, custom_enums, Base, AlreadyLoadedError
-from cobradb import seed, settings, util
+from cobradb import seed, settings
 from cobradb.rhea import load_rhea
 from cobradb.curated_metabolites import load_bigg_ids
 from cobradb.model_loading import load_model, load_model_assemblies
 from cobradb.version_loading import load_version_date
-from cobradb.memote import load_memote_results, run_memote
 from cobradb.taxonomy import load_taxonomy
 
 import argparse
@@ -45,6 +43,7 @@ parser.add_argument(
 parser.add_argument(
     "--drop-models", help="Empty model and map data", action="store_true"
 )
+parser.add_argument("--drop-genomes", help="Empty genome data.", action="store_true")
 parser.add_argument("--drop-maps", help="Empty map data", action="store_true")
 parser.add_argument("--skip-genomes", help="Skip genome loading", action="store_true")
 parser.add_argument("--skip-models", help="Skip model loading", action="store_true")
@@ -123,6 +122,17 @@ def drop_all_tables(engine, enums_to_drop=None):
 
 
 def prepare_chebi():
+    logging.warning("Preparing chebi.")
+    # Workaround because setting the environment variable does not seem to change anything.
+    chebi_cache_path = Path("/libChEBI")
+    chebi_new_cache_path = Path("/chebi/libChEBI")
+    chebi_new_cache_path.mkdir(parents=True, exist_ok=True)
+    if chebi_cache_path.exists():
+        if not chebi_cache_path.is_symlink():
+            shutil.rmtree(chebi_cache_path)
+            chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
+    else:
+        chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
     # Make sure all cache files are downloaded
     for i in range(10):
         failed = False
@@ -144,19 +154,9 @@ def prepare_chebi():
             break
         time.sleep(2)  # wait 2 seconds and try again
 
-    # Workaround because setting the environment variable does not seem to change anything.
-    chebi_cache_path = Path("/libChEBI")
-    chebi_new_cache_path = Path("/chebi/libChEBI")
-    chebi_new_cache_path.mkdir(parents=True, exist_ok=True)
-    if chebi_cache_path.exists():
-        if not chebi_cache_path.is_symlink():
-            shutil.rmtree(chebi_cache_path)
-            chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
-    else:
-        chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
-
 
 def main():
+    logging.basicConfig(level=logging.DEBUG)
     start_time = time.time()
     timings = {}
 
@@ -181,6 +181,18 @@ def main():
             conn.execute(text("DELETE FROM reaction WHERE collection_id IS NOT NULL;"))
 
         timings["drop_models"] = time.time() - f_start_time
+
+    if args.drop_genomes and not args.drop_all:
+        f_start_time = time.time()
+        from sqlalchemy.sql.expression import text
+
+        logging.info("Dropping rows from genomes")
+        with engine.begin() as conn:
+            conn.execute(
+                text("DROP TABLE IF EXISTS genome, chromosome, synonym CASCADE;")
+            )
+
+        timings["drop_genomes"] = time.time() - f_start_time
 
     if args.drop_maps and not args.drop_all:
         f_start_time = time.time()
@@ -221,11 +233,11 @@ def main():
         load_compartments(settings.compartment_names, session)
         session.commit()
 
-    if (
-        not args.skip_rhea
-        and not args.skip_curated_metabolites
-        and not args.skip_curated_reactions
-        and not args.skip_models
+    if not (
+        args.skip_rhea
+        and args.skip_curated_metabolites
+        and args.skip_curated_reactions
+        and args.skip_models
     ):
         prepare_chebi()
 
@@ -245,18 +257,19 @@ def main():
         # find the accessions for the genbank files
         logging.info("Finding GenBank files")
 
-        n = len(assemblies)
-        for i, (assembly_id, assembly_path) in enumerate(assemblies.items()):
-            logging.info(f"Loading assembly {assembly_id} ({i+1} of {n})")
-            try:
-                load_assembly(
-                    assembly_id, assembly_path, chromosomes.get(assembly_id), session
-                )
-            except AlreadyLoadedError as e:
-                logging.info(str(e))
-            except Exception as e:
-                logging.exception(e)
-        session.commit()
+        # engine.dispose()
+        # with Pool(settings.n_processes) as p:
+        #     p.starmap(
+        #         load_genomes_workflow,
+        #         [
+        #             (assembly_id, assembly_path, chromosomes.get(assembly_id))
+        #             for assembly_id, assembly_path in assemblies.items()
+        #         ],
+        #     )
+        for assembly_id, assembly_path in assemblies.items():
+            load_genomes_workflow(
+                assembly_id, assembly_path, chromosomes.get(assembly_id)
+            )
         timings["load_assemblies"] = time.time() - f_start_time
 
     if not args.skip_models:
@@ -281,13 +294,13 @@ def main():
             except AlreadyLoadedError as e:
                 logging.info(str(e))
                 model_bigg_id, model_db_id = e.bigg_id, e.db_id
-            except Exception as e:
-                print(
-                    f"model_dir: '{model_dir}', model_path: '{model_dir / model_dict['filename']}'"
-                )
-                logging.error("Could not load model %s." % model_dict["filename"])
-                logging.exception(e)
-
+            # except Exception as e:
+            #     print(
+            #         f"model_dir: '{model_dir}', model_path: '{model_dir / model_dict['filename']}'"
+            #     )
+            #     logging.error("Could not load model %s." % model_dict["filename"])
+            #     logging.exception(e)
+            #
         timings["load_models"] = time.time() - f_start_time
     if not args.skip_collections:
         logging.info("Loading model collections")

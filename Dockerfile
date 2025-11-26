@@ -13,6 +13,7 @@ RUN pip install -r requirements.txt
 RUN git clone https://github.com/pascalaldo/bigg_models_data.git bigg_models_data
 
 RUN git clone https://github.com/pascalaldo/biggr_maps.git biggr_maps
+RUN 
 WORKDIR /app/biggr_maps
 RUN python setup.py install
 
@@ -24,14 +25,18 @@ RUN python setup.py install
 #COPY settings.ini /app/settings.ini
 #COPY settings.small.ini /app/settings.ini
 
-CMD ["bin/new_load_db", "--drop-all", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-collections", "--skip-maps", "--skip-model-processing"]
-# CMD ["bin/new_load_db", "--drop-all"]
+# CMD ["bin/new_load_db", "--drop-all", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-collections", "--skip-maps", "--skip-model-processing"]
+CMD ["bin/new_load_db", "--drop-all"]
+# CMD ["bin/new_load_db", "--drop-models", "--skip-genomes", "--skip-memote", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-compartments", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-taxonomy"]
+# CMD ["bin/new_load_db", "--drop-genomes", "--skip-compartments", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-taxonomy", "--skip-models", "--skip-collections", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-maps", "--skip-model-processing", "--skip-memote"]
 # CMD ["bin/new_load_db", "--drop-all", "--skip-genomes", "--skip-curated-reactions", "--skip-models"]
 # CMD ["bin/new_load_db", "--skip-genomes"]
 # CMD ["bin/new_load_db", "--skip-rhea", "--skip-curated-metabolites"]
 # CMD ["bin/new_load_db", "--skip-rhea", "--skip-curated-metabolites"]
 # CMD ["bin/new_load_db", "--drop-models", "--skip-compartments", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-taxonomy", "--skip-genomes"]
-# CMD ["bin/new_load_db", "--skip-compartments", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-taxonomy", "--skip-genomes", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-model-processing"]
+# CMD ["bin/new_load_db", "--drop-maps", "--skip-compartments", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-taxonomy", "--skip-genomes", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-model-processing", "--skip-collections"]
+# CMD ["bin/new_load_db", "--skip-compartments", "--skip-rhea", "--skip-curated-metabolites", "--skip-taxonomy", "--skip-genomes", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-model-processing", "--skip-collections", "--skip-maps"]
+# CMD ["bin/new_load_db", "--drop-all", "--skip-compartments", "--skip-curated-metabolites", "--skip-taxonomy", "--skip-genomes", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-model-processing", "--skip-collections", "--skip-maps"]
 # CMD ["bin/new_load_db", "--skip-compartments", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-taxonomy", "--skip-genomes", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions", "--skip-collections", "--skip-maps"]
 # CMD ["bin/new_load_db", "--drop-models", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-genomes", "--skip-seed-metabolites", "--skip-seed-reactions"]
 # CMD ["bin/new_load_db", "--skip-genomes", "--skip-rhea", "--skip-curated-metabolites", "--skip-curated-reactions", "--skip-compartments", "--skip-models", "--skip-seed-metabolites", "--skip-seed-reactions"]
