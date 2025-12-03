@@ -14,7 +14,7 @@ def load_bigg_id_data(filename):
 
 @timing
 def push_metabolites(session: Session, data: Dict[str, Any]):
-    for ch, chebi_info in data["chebis"].items():
+    for ch, chebi_info in data.get("chebis", {}).items():
         if not chebi_info.get("formula"):
             print(f"Skipping {ch}, no formula.")
 
@@ -27,11 +27,18 @@ def push_metabolites(session: Session, data: Dict[str, Any]):
             print(f"ChEBI entry '{ch}' could not be created.")
     session.commit()
 
-    for bid, bid_info in data["bigg_ids"].items():
+    for bid, bid_info in data.get("bigg_ids", {}).items():
         if "##" in bid:
             continue
 
-        metabolites.create_metabolite(session, bid, bid_info["chebis"][0])
+        if "complex" in bid_info:
+            metabolites.create_complex_metabolite(session, bid, bid_info["complex"])
+        else:
+            base_chebi = (
+                bid_info["chebi"] if "chebi" in bid_info else bid_info["chebis"][0]
+            )
+            ref_n = bid_info.get("reference_n")
+            metabolites.create_metabolite(session, bid, base_chebi, reference_n=ref_n)
 
     for old_id, new_id in data.get("bigg_id_mapping", {}).items():
         metabolites.create_component_id_mapping(session, old_id, new_id)

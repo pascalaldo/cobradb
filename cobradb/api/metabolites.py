@@ -94,6 +94,7 @@ def _create_component(
     reference_compound_db: Optional[ReferenceCompound] = None,
     charge: Optional[Union[int, str]] = None,
     formula: Optional[str] = None,
+    variant: Optional[int] = None,
     name: Optional[str] = None,
     collection_db: Optional[ModelCollection] = None,
     require_formula: bool = True,
@@ -123,6 +124,7 @@ def _create_component(
         formula=formula,
         charge=int_charge,
         collection=collection_db,
+        variant=variant,
     )
     universal_component_db.components.append(component_db)
     return component_db
@@ -134,12 +136,14 @@ def _create_universal_component(
     name: Optional[str] = None,
     collection_db: Optional[ModelCollection] = None,
     default_component: Optional[Component] = None,
+    allow_flexible_variants: bool = False,
 ):
     universal_component_db = UniversalComponent(
         bigg_id=bigg_id,
         name=name,
         collection=collection_db,
         default_component=default_component,
+        allow_flexible_variants=allow_flexible_variants,
     )
     session.add(universal_component_db)
     return universal_component_db
@@ -362,15 +366,28 @@ def _create_reference_compound(
             charge=charge,
             compound_type=compound_type,
         )
+        reactive_parts_formula_sum = utils.Formula({})
+        reactive_parts_charge_sum = 0
         if reactive_parts is not None:
             for reactive_part in reactive_parts:
                 reactive_part_db = utils.get_object_by_bigg_id(
                     session, reactive_part, ReferenceReactivePart
                 )
+                if reactive_part_db is None:
+                    return
+                reactive_parts_formula_sum += reactive_part_db.formula
+                reactive_parts_charge_sum += (
+                    0
+                    if reactive_part_db.charge is None
+                    else int(reactive_part_db.charge)
+                )
                 reactive_part_matrix_db = ReferenceReactivePartMatrix(
                     reactive_part=reactive_part_db,
                 )
                 compound_db.reactive_part_matrix.append(reactive_part_matrix_db)
+        if compound_db.formula is None or compound_db.charge is None:
+            compound_db.formula = str(reactive_parts_formula_sum)
+            compound_db.charge = str(reactive_parts_charge_sum)
         session.add(compound_db)
     session.commit()
     if compound_db is not None:
@@ -384,6 +401,7 @@ def create_metabolite(
     proposed_bigg_id: str,
     input_chebi: str,
     assure_present: Optional[Tuple[Any, Any]] = None,
+    reference_n: Optional[int] = None,
 ):
     if not bigg_ids_api.is_bigg_id_valid(
         proposed_bigg_id, bigg_ids_api.BiGGIDType.UNIVERSAL_COMPONENT
@@ -403,8 +421,11 @@ def create_metabolite(
                 "new_id": universal_component_db.bigg_id,
             }
 
-    all_chebis = get_related_chebis(input_chebi)
-    all_chebis = list({input_chebi} | set(all_chebis.keys()))
+    if reference_n is None:
+        all_chebis = get_related_chebis(input_chebi)
+        all_chebis = list({input_chebi} | set(all_chebis.keys()))
+    else:
+        all_chebis = [input_chebi]
 
     component_ref_mapping_db = session.execute(
         select(
@@ -416,6 +437,7 @@ def create_metabolite(
         .join(ComponentReferenceMapping.component)
         .join(Component.universal_component)
         .filter(ReferenceCompound.bigg_id.in_(all_chebis))
+        .filter(ComponentReferenceMapping.reference_n == reference_n)
         .limit(1)
     ).one_or_none()
     if component_ref_mapping_db:
@@ -434,11 +456,21 @@ def create_metabolite(
 
     if assure_present:
         assure_charge, assure_formula = assure_present
-        if not any(
-            (float(str(ref.charge)) == assure_charge)
-            and utils.are_explicit_formulae_equivalent(ref.formula, assure_formula)
-            for ref in references_db.values()
-        ):
+        assure_f = utils.Formula(assure_formula)
+
+        if reference_n is None:
+            comp = any(
+                (float(str(ref.charge)) == assure_charge)
+                and (utils.Formula(ref.formula) == assure_f)
+                for ref in references_db.values()
+            )
+        else:
+            comp = any(
+                (utils.NCharge(ref.charge).fill(reference_n) == assure_charge)
+                and (utils.NFormula(ref.formula).fill(reference_n) == assure_f)
+                for ref in references_db.values()
+            )
+        if not comp:
             return {
                 "status": "error",
                 "message": "charge + formula combination not present",
@@ -466,8 +498,16 @@ def create_metabolite(
 
     full_bids_created = {}
     for chebi, reference_db in references_db.items():
+        if reference_n is None:
+            explicit_charge = reference_db.charge
+            explicit_formula = reference_db.formula
+        else:
+            explicit_charge = utils.NCharge(reference_db.charge).fill(reference_n)
+            explicit_formula = str(
+                utils.NFormula(reference_db.formula).fill(reference_n)
+            )
         full_bid = bigg_ids_api.create_component_bigg_id(
-            proposed_bigg_id, charge=reference_db.charge
+            proposed_bigg_id, charge=explicit_charge
         )
         if full_bid not in full_bids_created:
             if (
@@ -475,7 +515,9 @@ def create_metabolite(
                     session,
                     full_bid,
                     universal_component_db,
-                    reference_db,
+                    name=reference_db.name,
+                    charge=explicit_charge,
+                    formula=explicit_formula,
                 )
             ) is None:
                 continue
@@ -485,6 +527,7 @@ def create_metabolite(
         component_ref_mapping_db = ComponentReferenceMapping(
             universal_component=universal_component_db,
             reference_compound=reference_db,
+            reference_n=reference_n,
         )
         component_db.reference_mappings.append(component_ref_mapping_db)
 
@@ -513,6 +556,93 @@ def create_metabolite(
     session.commit()
 
     return {"status": "success", "components_added": successfully_added}
+
+
+def create_complex_metabolite(
+    session: Session,
+    proposed_bigg_id: str,
+    ref_identifier: str,
+):
+    if not bigg_ids_api.is_bigg_id_valid(
+        proposed_bigg_id, bigg_ids_api.BiGGIDType.UNIVERSAL_COMPONENT
+    ):
+        return {"status": "error", "message": "invalid bigg id"}
+
+    universal_component_db = get_universal_component_by_bigg_id(
+        session, proposed_bigg_id
+    )
+    if universal_component_db is not None:
+        if universal_component_db.bigg_id == proposed_bigg_id:
+            return {"status": "error", "message": "bigg id already exists"}
+        else:
+            return {
+                "status": "error",
+                "message": "bigg id is a deprecated id",
+                "new_id": universal_component_db.bigg_id,
+            }
+
+    component_ref_mapping_db = session.execute(
+        select(
+            ComponentReferenceMapping,
+            Bundle("ref_comp", ReferenceCompound.bigg_id),
+            Bundle("uni_comp", UniversalComponent.bigg_id),
+        )
+        .join(ComponentReferenceMapping.reference_compound)
+        .join(ComponentReferenceMapping.component)
+        .join(Component.universal_component)
+        .filter(ReferenceCompound.bigg_id == ref_identifier)
+        .limit(1)
+    ).one_or_none()
+    if component_ref_mapping_db:
+        return {
+            "status": "error",
+            "message": "reference identifier already associated",
+            "chebi": component_ref_mapping_db.ref_comp.bigg_id,
+            "bigg_id": component_ref_mapping_db.uni_comp.bigg_id,
+        }
+
+    reference_db = session.scalars(
+        select(ReferenceCompound)
+        .filter(ReferenceCompound.bigg_id == ref_identifier)
+        .limit(1)
+    ).first()
+
+    if reference_db is None:
+        return {"status": "error", "message": "Reference could not be found"}
+
+    universal_component_db = _create_universal_component(
+        session,
+        bigg_id=proposed_bigg_id,
+        name=reference_db.name,
+        allow_flexible_variants=True,
+    )
+    session.commit()
+
+    charge = 0 if reference_db.charge is None else int(reference_db.charge)
+    full_bid = bigg_ids_api.create_component_bigg_id(proposed_bigg_id, charge=charge)
+    component_db = _create_component(
+        session, full_bid, universal_component_db, reference_db
+    )
+    if component_db is None:
+        return {
+            "status": "error",
+            "message": "could not create component",
+        }
+    component_ref_mapping_db = ComponentReferenceMapping(
+        universal_component=universal_component_db,
+        reference_compound=reference_db,
+        reference_formula_delta="",
+    )
+    component_db.reference_mappings.append(component_ref_mapping_db)
+    universal_component_ref_mapping_db = UniversalComponentReferenceMapping(
+        id=universal_component_db.id, mapping=component_ref_mapping_db
+    )
+    session.add(universal_component_ref_mapping_db)
+
+    universal_component_db.default_component = component_db
+    session.commit()
+
+    return {"status": "success", "components_added": [full_bid]}
 
 
 def create_collection_specific_metabolite(
@@ -639,6 +769,7 @@ def get_or_create_compartmentalized_component(
             base_bigg_id=component_db.universal_component.bigg_id,
             compartment_bigg_id=compartment_db.bigg_id,
             charge=component_db.charge,
+            variant=component_db.variant,
         )
         compartmentalized_component_db = CompartmentalizedComponent(
             bigg_id=cc_bigg_id,

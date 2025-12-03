@@ -9,13 +9,14 @@ from cobradb.models import AlreadyLoadedError, Session
 
 
 def process_model_workflow(
-    model_dir: Path, model_filename: str, skip_memote: bool = False
+    model_dir: Path, model_filename: str, model_data, skip_memote: bool = False
 ):
     with Session() as session:
         model_bigg_id = None
         try:
             model_bigg_id, _model_db_id = process_model(
                 session,
+                model_data,
                 model_dir / model_filename,
             )
         except Exception as e:
@@ -24,6 +25,7 @@ def process_model_workflow(
             )
             logging.error("Could not load model %s." % model_filename)
             logging.exception(e)
+        logging.warning(f"Model bigg_id: {model_bigg_id}")
 
         if not skip_memote and model_bigg_id is not None:
             model_biggr_filename = f"/models/models/{model_bigg_id}.biggr.sbml"
@@ -48,6 +50,8 @@ def process_model_workflow(
                 except Exception as e:
                     logging.error("Could not load memote results %s." % model_filename)
                     logging.exception(e)
+        else:
+            logging.warning("Skipping MEMOTE")
 
 
 def load_genomes_workflow(

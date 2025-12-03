@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+
+import os
+import time
+import logging
+import shutil
+from pathlib import Path
+
+os.environ["LIBCHEBIPY_DOWNLOAD_DIR"] = "/chebi"
+
+from cobradb.chebi import ChebiEntity, get_chebi_for_inchikey, parse_structures
+
+from sqlalchemy import select
+from sqlalchemy.orm import close_all_sessions, subqueryload
+
+from cobradb.models import (
+    Component,
+    ComponentReferenceMapping,
+    InChI,
+    ReferenceCompound,
+    Session,
+    UniversalComponent,
+)
+from cobradb.api.utils import Formula
+import json
+
+
+def prepare_chebi():
+    logging.warning("Preparing chebi.")
+    # Workaround because setting the environment variable does not seem to change anything.
+    chebi_cache_path = Path("/libChEBI")
+    chebi_new_cache_path = Path("/chebi/libChEBI")
+    chebi_new_cache_path.mkdir(parents=True, exist_ok=True)
+    if chebi_cache_path.exists():
+        if not chebi_cache_path.is_symlink():
+            shutil.rmtree(chebi_cache_path)
+            chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
+    else:
+        chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
+    # Make sure all cache files are downloaded
+    for i in range(10):
+        failed = False
+        try:
+            # Load a random chebi entity and access all relevant information.
+            # Will download all appropriate files for all compounds.
+            c = ChebiEntity("CHEBI:27732")
+            parse_structures()
+            c.get_id()
+            c.get_charge()
+            c.get_names()
+            c.get_incomings()
+            c.get_inchi()
+            c.get_database_accessions()
+            c.get_smiles()
+        except:
+            failed = True
+        if not failed:
+            break
+        time.sleep(2)  # wait 2 seconds and try again
+
+
+def find_chebi_in_db(session, ua_chebi, ua_met_formulae, bare_bigg_id):
+    chebi_match = session.scalars(
+        select(ReferenceCompound)
+        .options(
+            subqueryload(ReferenceCompound.reference_mappings).joinedload(
+                ComponentReferenceMapping.component
+            )
+        )
+        .filter(ReferenceCompound.bigg_id == ua_chebi)
+        .limit(1)
+    ).first()
+    if (
+        chebi_match is not None
+        and chebi_match.formula is not None
+        and chebi_match.charge is not None
+    ):
+        print("CHEBI in DB")
+        f_db = Formula(chebi_match.formula)
+        component_match = False
+        for f_c, charge_c in ua_met_formulae:
+            if f_db == f_c and int(charge_c) == int(chebi_match.charge):
+                component_match = True
+                break
+            else:
+                f_diff = f_db - f_c
+                print(f"Diff: {str(f_diff)}")
+                if len(f_diff._d) == 1 and "H" in f_diff._d:
+                    charge_diff = int(chebi_match.charge) - int(charge_c)
+                    print(f"Charge diff: {charge_diff}")
+                    if f_diff["H"] == charge_diff:
+                        component_match = True
+                        break
+
+        if not component_match:
+            print(
+                "None of the formulae + charge combinations of the components matched"
+            )
+            print([(str(x), y) for x, y in ua_met_formulae])
+            print((str(f_db), chebi_match.charge))
+        else:
+            if len(chebi_match.reference_mappings) == 0:
+                print("No Component assigned yet")
+                print(f'    "{bare_bigg_id}": {{ "chebis": "{ua_chebi}" }},')
+                return
+            else:
+                print(
+                    f"Already assigned to {chebi_match.reference_mappings[0].component.bigg_id}"
+                )
+    else:
+        print("CHEBI not yet in DB")
+        c = ChebiEntity(ua_chebi)
+        if not c:
+            print(f"Could not load {ua_chebi}")
+        else:
+            try:
+                charge = int(c.get_charge())
+                formula = Formula(c.get_formula())
+            except:
+                print("Could not interpret charge or formula")
+                charge = None
+                formula = None
+
+            if charge is not None and formula is not None:
+                component_match = False
+                for f_c, charge_c in ua_met_formulae:
+                    if formula == f_c and int(charge_c) == charge:
+                        component_match = True
+                        break
+                    else:
+                        f_diff = formula - f_c
+                        print(f"Diff: {str(f_diff)}")
+                        if len(f_diff._d) == 1 and "H" in f_diff._d:
+                            charge_diff = int(charge) - int(charge_c)
+                            print(f"Charge diff: {charge_diff}")
+                            if f_diff["H"] == charge_diff:
+                                component_match = True
+                                break
+
+                if not component_match:
+                    print(
+                        "None of the formulae + charge combinations of the components matched"
+                    )
+                    print([(str(x), y) for x, y in ua_met_formulae])
+                    print((str(formula), charge))
+                else:
+                    print("Formula and charge match universal component")
+                    print(f'    "{bare_bigg_id}": {{ "chebis": "{ua_chebi}" }},')
+
+
+def read_ecmdb_file(filename):
+    with open(filename, "r") as f:
+        data = json.load(f)
+    name_data = {}
+    for d in data:
+        name = d.get("name")
+        if name is None:
+            continue
+        name = name.upper()
+        if name in name_data:
+            print(f"Duplicate entries for name '{name}'")
+        name_data[name] = d
+    return name_data
+
+
+def main(data):
+    # make the session
+    session = Session()
+
+    unassigned_metabolites = session.scalars(
+        select(UniversalComponent)
+        .options(subqueryload(UniversalComponent.components))
+        .filter(UniversalComponent.collection_id != None)
+    ).all()
+
+    for ua_met in unassigned_metabolites:
+        if ua_met.name is None:
+            continue
+
+        try:
+            _, bare_bigg_id = ua_met.bigg_id.removeprefix("__").split("__", maxsplit=1)
+        except:
+            print(f"Failed to interpret bigg_id: {ua_met.bigg_id}")
+            continue
+        a_met = session.scalars(
+            select(UniversalComponent)
+            .filter(UniversalComponent.bigg_id == bare_bigg_id)
+            .limit(1)
+        ).first()
+        if a_met is not None:
+            print(f"There already is a universal component '{bare_bigg_id}'")
+            continue
+
+        d = data.get(ua_met.name.upper())
+        if d is None:
+            print(f"Could not find any info for '{bare_bigg_id}'")
+            print(f"Name: {ua_met.name}")
+            continue
+
+        ua_met_formulae = [(Formula(c.formula), c.charge) for c in ua_met.components]
+
+        print(f"# Found matching entry for {ua_met.bigg_id}")
+        print(ua_met.name)
+
+        ua_chebi = d.get("chebi_id")
+        if ua_chebi is not None:
+            if not ua_chebi.startswith("CHEBI:"):
+                ua_chebi = f"CHEBI:{ua_chebi}"
+            print("CHEBI in entry")
+
+            find_chebi_in_db(session, ua_chebi, ua_met_formulae, bare_bigg_id)
+
+        ua_inchikey = d.get("moldb_inchikey")
+        if ua_inchikey is not None:
+            print("InChIKey in entry")
+
+            ua_inchikey_without_proton = "-".join(ua_inchikey.split("-")[:2])
+
+            inchi_match = session.scalars(
+                select(ReferenceCompound)
+                .options(
+                    subqueryload(ReferenceCompound.reference_mappings).joinedload(
+                        ComponentReferenceMapping.component
+                    )
+                )
+                .join(ReferenceCompound.inchi)
+                .filter(InChI.key.like(f"{ua_inchikey_without_proton}%"))
+                .limit(1)
+            ).first()
+            if inchi_match is not None:
+                print("InChI in DB")
+                if len(inchi_match.reference_mappings) == 0:
+                    print("No Component assigned yet")
+                    print(
+                        f'    "{bare_bigg_id}": {{ "chebis": "{inchi_match.bigg_id}" }},'
+                    )
+                    continue
+                else:
+                    print(
+                        f"Already assigned to {inchi_match.reference_mappings[0].component.bigg_id}"
+                    )
+            else:
+                print("InChI not yet in DB")
+                chebi_for_inchi = get_chebi_for_inchikey(ua_inchikey_without_proton)
+                if chebi_for_inchi is not None:
+                    chebi_id = f"CHEBI:{chebi_for_inchi}"
+
+                    print("CHEBI found via InChIKey")
+                    find_chebi_in_db(session, chebi_id, ua_met_formulae, bare_bigg_id)
+                else:
+                    print("InChIKey without known CHEBI")
+                    print(f"InChIKey={ua_inchikey}")
+
+    session.close()
+    close_all_sessions()
+
+
+if __name__ == "__main__":
+    prepare_chebi()
+    data = read_ecmdb_file("ecmdb.json")
+    main(data)

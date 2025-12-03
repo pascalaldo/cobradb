@@ -622,24 +622,32 @@ def get_or_create_reaction_for_universal_reaction(
         logging.warning(f"Reaction '{reaction_hash}' already exists.")
         return reaction_db
 
-    universal_matrix = {
-        x.universal_compartmentalized_component_id: x
-        for x in universal_reaction_db.matrix
-    }
+    universal_matrix_orig = {}
+    for x in universal_reaction_db.matrix:
+        ucc_id = x.universal_compartmentalized_component_id
+        universal_matrix_orig[ucc_id] = universal_matrix_orig.get(ucc_id, []) + [x]
 
     reaction_matrix = []
     for is_reversed in [False, True]:
+        universal_matrix = universal_matrix_orig.copy()
         for participant in reaction_participants:
             compartmentalized_component_db = participant.compartmentalized_component
             original_coefficient = participant.coefficient
             coefficient = -original_coefficient if is_reversed else original_coefficient
 
-            matched_matrix = universal_matrix.get(
-                compartmentalized_component_db.universal_compartmentalized_component_id
+            matched_matrices = universal_matrix.get(
+                compartmentalized_component_db.universal_compartmentalized_component_id,
+                [],
             )
-            if matched_matrix is not None and matched_matrix.coefficient != coefficient:
+
+            matched_matrix = None
+            for mm in matched_matrices:
+                if mm.coefficient == coefficient:
+                    matched_matrix = mm
+                    break
+            else:
                 logging.warning(
-                    f"Coefficients do not match: {matched_matrix.coefficient} vs. {coefficient}"
+                    f"Coefficients do not match: {[matched_matrix.coefficient for matched_matrix in matched_matrices]} vs. {coefficient}"
                 )
                 matched_matrix = None
 
@@ -659,9 +667,12 @@ def get_or_create_reaction_for_universal_reaction(
                     coefficient=coefficient,
                 )
             else:
-                del universal_matrix[
+                ucc_id = (
                     compartmentalized_component_db.universal_compartmentalized_component_id
-                ]
+                )
+                universal_matrix[ucc_id].remove(matched_matrix)
+                if len(universal_matrix[ucc_id]) == 0:
+                    del universal_matrix[ucc_id]
             reaction_matrix.append(
                 ReactionMatrix(
                     universal_reaction_matrix=matched_matrix,
@@ -671,7 +682,9 @@ def get_or_create_reaction_for_universal_reaction(
         else:
             for unmatched_matrix in universal_matrix.values():
                 if (
-                    uc_bigg_id := unmatched_matrix.universal_compartmentalized_component.universal_component.bigg_id
+                    uc_bigg_id := unmatched_matrix[
+                        0
+                    ].universal_compartmentalized_component.universal_component.bigg_id
                 ) != "h":
                     # print(
                     #     f"No match for {unmatched_matrix.universal_compartmentalized_component} when creating a reaction for univeral reaction {universal_reaction_db.bigg_id}."

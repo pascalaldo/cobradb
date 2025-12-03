@@ -177,8 +177,14 @@ def main():
                     "DROP TABLE IF EXISTS model, model_collection, model_reaction, model_compartmentalized_component, model_gene, memote_result, model_count, publication_model CASCADE;"
                 )
             )
+            conn.execute(text("DELETE FROM component WHERE collection_id IS NOT NULL;"))
+            conn.execute(
+                text("DELETE FROM universal_component WHERE collection_id IS NOT NULL;")
+            )
             conn.execute(text("DELETE FROM reaction WHERE collection_id IS NOT NULL;"))
-            conn.execute(text("DELETE FROM reaction WHERE collection_id IS NOT NULL;"))
+            conn.execute(
+                text("DELETE FROM universal_reaction WHERE collection_id IS NOT NULL;")
+            )
 
         timings["drop_models"] = time.time() - f_start_time
 
@@ -336,7 +342,7 @@ def main():
             p.starmap(
                 process_model_workflow,
                 [
-                    (model_dir, model_dict["filename"], args.skip_memote)
+                    (model_dir, model_dict["filename"], model_dict, args.skip_memote)
                     for model_dict in models_list
                 ],
             )

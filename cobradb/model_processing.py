@@ -49,10 +49,12 @@ def create_model_base_filename(session: Session, bigg_id: str) -> str:
 
 
 @timing
-def process_model(session: Session, model_filepath: Union[str, PathLike]):
+def process_model(session: Session, model_data, model_filepath: Union[str, PathLike]):
     # apply id normalization
     logging.debug("Parsing SBML")
     model, old_parsed_ids = parse.load_and_normalize(model_filepath)
+    if model_data.get("prefix") is not None:
+        model.id = f"{model_data['prefix']}{model.id}"
     model_bigg_id = model.id
 
     # check that the model doesn't already exist

@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+
+from sqlalchemy import select
+from sqlalchemy.orm import close_all_sessions
+
+from cobradb.models import (
+    Component,
+    ReferenceCompound,
+    Session,
+)
+from cobradb.api.utils import Formula
+
+
+def main():
+    # make the session
+    session = Session()
+
+    acp_components = session.scalars(
+        select(Component)
+        .filter(Component.collection_id == 1)
+        .filter(Component.bigg_id.like("%ACP:%"))
+    ).all()
+    diff_formula = Formula("C-3H-4N-1O-1R")
+
+    for component in acp_components:
+        if component.formula is None:
+            continue
+        bigg_id = component.bigg_id.removeprefix("__iJO1366__")
+        bigg_id, _ = bigg_id.split(":", maxsplit=1)
+        print(f"$ {bigg_id}")
+        formula = Formula(component.formula)
+        ref_formula = formula - diff_formula
+
+        references = session.scalars(
+            select(ReferenceCompound).filter(
+                ReferenceCompound.formula == str(ref_formula)
+            )
+        ).all()
+        if len(references) == 0:
+            print(f"# No reference found")
+        else:
+            if len(references) > 1:
+                print(f"@ Multiple references found")
+            for reference in references:
+                print(f"== {component.name} == {reference.name}")
+                print(f'    "{bigg_id}": {{ "complex": "{reference.bigg_id}" }},')
+
+    session.close()
+    close_all_sessions()
+
+
+if __name__ == "__main__":
+    main()

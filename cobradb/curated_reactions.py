@@ -65,6 +65,7 @@ def parse_reaction_participants(
                 component_db = session.scalars(
                     select(Component)
                     .filter(Component.charge == float(charge))
+                    .filter(Component.variant == 0)
                     .filter(
                         Component.universal_component_id == universal_component_db.id
                     )
@@ -89,6 +90,7 @@ def parse_reaction_participants(
                 cc_bigg_id = create_component_bigg_id(
                     base_bigg_id=universal_component_db.bigg_id,
                     charge=component_db.charge,
+                    variant=component_db.variant,
                     compartment_bigg_id=compartment_db.bigg_id,
                 )
                 compartmentalized_component_db = CompartmentalizedComponent(
