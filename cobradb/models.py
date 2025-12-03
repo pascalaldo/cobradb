@@ -209,6 +209,11 @@ class InChI(Base):
                 return False
         return True
 
+    def charge(self):
+        n_protons = 0 if self.p is None else int(self.p)
+        base_charge = 0 if self.q is None else int(self.q)
+        return base_charge + n_protons
+
 
 def _raise_when_no_value_specified():
     raise ValueError("A specific value should be set.")

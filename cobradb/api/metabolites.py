@@ -1,3 +1,4 @@
+import logging
 from typing import Any, List, Optional, Tuple, Type, TypeVar, Union
 
 from sqlalchemy import select
@@ -643,6 +644,57 @@ def create_complex_metabolite(
     session.commit()
 
     return {"status": "success", "components_added": [full_bid]}
+
+
+def create_metabolites_for_inchis(session: Session, bid: str, inchis: List[str]):
+    inchi_objects = []
+    for inchi in inchis:
+        inchi_obj = InChI.from_string(inchi)
+        if inchi_obj is None:
+            logging.error(f"Could not parse InChI string: '{inchi}'")
+            continue
+        possible_matches = session.scalars(
+            select(InChI)
+            .filter(InChI.key_major == inchi_obj.key_major)
+            .filter(InChI.key_minor == inchi_obj.key_minor)
+            .filter(InChI.key_proton == inchi_obj.key_proton)
+        ).all()
+        if any(x == inchi_obj for x in possible_matches):
+            logging.error(f"InChI is already in database: '{inchi}'")
+            continue
+        inchi_objects.append(inchi_obj)
+    existing_components = session.scalars(
+        select(Component)
+        .join(Component.universal_component)
+        .filter(UniversalComponent.bigg_id == bid)
+    ).all()
+    common_key_major = None
+    common_key_minor = None
+    existing_charges = set()
+    for existing_component in existing_components:
+        if len(existing_component.reference_mappings) == 0:
+            logging.error(
+                f"Existing component '{existing_component.bigg_id}' does not have a reference"
+            )
+            return
+        for ref_map in existing_component.reference_mappings:
+            if ref_map.reference_compound.inchi is None:
+                logging.error(
+                    f"Existing component '{existing_component.bigg_id}' with reference {ref_map.reference_compound.bigg_id} does not have an InChI associated."
+                )
+                return
+            if common_key_major is None:
+                common_key_major = ref_map.reference_compound.inchi.key_major
+                common_key_minor = ref_map.reference_compound.inchi.key_minor
+            else:
+                if (
+                    common_key_major != ref_map.reference_compound.inchi.key_major
+                    or common_key_minor != ref_map.reference_compound.inchi.key_minor
+                ):
+                    logging.error(
+                        f"Existing component '{existing_component.bigg_id}' with reference {ref_map.reference_compound.bigg_id} has conflicting InChI associated."
+                    )
+                    return
 
 
 def create_collection_specific_metabolite(
