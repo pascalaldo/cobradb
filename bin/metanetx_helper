@@ -59,7 +59,7 @@ def prepare_chebi():
         time.sleep(2)  # wait 2 seconds and try again
 
 
-def find_chebi_in_db(session, ua_chebi, ua_met_formulae, bare_bigg_id):
+def find_chebi_in_db(session, ua_chebi, bare_bigg_id, bigg_id_assignments):
     chebi_match = session.scalars(
         select(ReferenceCompound)
         .options(
@@ -76,40 +76,23 @@ def find_chebi_in_db(session, ua_chebi, ua_met_formulae, bare_bigg_id):
         and chebi_match.charge is not None
     ):
         print("CHEBI in DB")
-        f_db = Formula(chebi_match.formula)
-        component_match = False
-        for f_c, charge_c in ua_met_formulae:
-            if f_db == f_c and int(charge_c) == int(chebi_match.charge):
-                component_match = True
-                break
+        if len(chebi_match.reference_mappings) == 0:
+            print("No Component assigned yet")
+            if bare_bigg_id in bigg_id_assignments:
+                bigg_id_assignments[bare_bigg_id].add(ua_chebi)
             else:
-                f_diff = f_db - f_c
-                print(f"Diff: {str(f_diff)}")
-                if len(f_diff._d) == 1 and "H" in f_diff._d:
-                    charge_diff = int(chebi_match.charge) - int(charge_c)
-                    print(f"Charge diff: {charge_diff}")
-                    if f_diff["H"] == charge_diff:
-                        component_match = True
-                        break
-
-        if not component_match:
-            print(
-                "None of the formulae + charge combinations of the components matched"
-            )
-            print([(str(x), y) for x, y in ua_met_formulae])
-            print((str(f_db), chebi_match.charge))
+                bigg_id_assignments[bare_bigg_id] = {ua_chebi}
+            return True
         else:
-            if len(chebi_match.reference_mappings) == 0:
-                print("No Component assigned yet")
-                print(f'    "{bare_bigg_id}": {{ "chebis": "{ua_chebi}" }},')
-                return True
-            else:
-                print(
-                    f"Already assigned to {chebi_match.reference_mappings[0].component.bigg_id}"
-                )
+            print(
+                f"Already assigned to {chebi_match.reference_mappings[0].component.bigg_id}"
+            )
     else:
         print("CHEBI not yet in DB")
-        c = ChebiEntity(ua_chebi)
+        try:
+            c = ChebiEntity(ua_chebi)
+        except:
+            c = None
         if not c:
             print(f"Could not load {ua_chebi}")
         else:
@@ -122,103 +105,96 @@ def find_chebi_in_db(session, ua_chebi, ua_met_formulae, bare_bigg_id):
                 formula = None
 
             if charge is not None and formula is not None:
-                component_match = False
-                for f_c, charge_c in ua_met_formulae:
-                    if formula == f_c and int(charge_c) == charge:
-                        component_match = True
-                        break
-                    else:
-                        f_diff = formula - f_c
-                        print(f"Diff: {str(f_diff)}")
-                        if len(f_diff._d) == 1 and "H" in f_diff._d:
-                            charge_diff = int(charge) - int(charge_c)
-                            print(f"Charge diff: {charge_diff}")
-                            if f_diff["H"] == charge_diff:
-                                component_match = True
-                                break
-
-                if not component_match:
-                    print(
-                        "None of the formulae + charge combinations of the components matched"
-                    )
-                    print([(str(x), y) for x, y in ua_met_formulae])
-                    print((str(formula), charge))
+                print("Formula and charge available")
+                if bare_bigg_id in bigg_id_assignments:
+                    bigg_id_assignments[bare_bigg_id].add(ua_chebi)
                 else:
-                    print("Formula and charge match universal component")
-                    print(f'    "{bare_bigg_id}": {{ "chebis": "{ua_chebi}" }},')
-                    return True
+                    bigg_id_assignments[bare_bigg_id] = {ua_chebi}
+                return True
     return False
 
 
-def read_ecmdb_file(filename):
-    with open(filename, "r") as f:
-        data = json.load(f)
-    name_data = {}
-    for d in data:
-        name = d.get("name")
-        if name is None:
-            continue
-        name = name.upper()
-        if name in name_data:
-            print(f"Duplicate entries for name '{name}'")
-        name_data[name] = d
-    return name_data
+def read_mnx_files(xref_filename, prop_filename):
+    mnx_info = {}
+    with open(xref_filename, "r") as f:
+        for l in f:
+            if l.startswith("#"):
+                continue
+            try:
+                external_id, mnx_id, _ = l.split("\t")
+            except:
+                continue
+            if external_id.startswith("bigg.metabolite:"):
+                mnx_info[mnx_id] = mnx_info.get(mnx_id, {}) | {
+                    "bigg": external_id.removeprefix("bigg.metabolite:")
+                }
+            elif external_id.startswith("CHEBI:"):
+                mnx_info[mnx_id] = mnx_info.get(mnx_id, {}) | {"CHEBI": external_id}
+    # bigg_to_chebi = {m["bigg"]: m["CHEBI"] for m in mnx_info.values() if "bigg" in m and "CHEBI" in m}
+    with open(prop_filename, "r") as f:
+        for l in f:
+            if l.startswith("#"):
+                continue
+            try:
+                (
+                    mnx_id,
+                    name,
+                    ref_comp,
+                    formula,
+                    charge,
+                    mass,
+                    inchi,
+                    inchikey,
+                    smiles,
+                ) = l.split("\t")
+            except:
+                continue
+            if formula.strip().endswith("*"):
+                continue
+            if not inchi.strip():
+                continue
+            if not inchikey.strip():
+                continue
+            mnx_info[mnx_id] = mnx_info.get(mnx_id, {}) | {
+                "name": name,
+                "charge": charge,
+                "formula": formula,
+                "inchi": inchi,
+                "inchikey": inchikey,
+            }
+    bigg_info = {m["bigg"]: m for m in mnx_info.values() if "bigg" in m}
+    return bigg_info
 
 
 def main(data):
     # make the session
     session = Session()
     inchi_definitions = {}
+    bigg_id_assignments = {}
 
-    unassigned_metabolites = session.scalars(
-        select(UniversalComponent)
-        .options(subqueryload(UniversalComponent.components))
-        .filter(UniversalComponent.collection_id != None)
-    ).all()
-
-    for ua_met in unassigned_metabolites:
-        if ua_met.name is None:
-            continue
-
-        try:
-            _, bare_bigg_id = ua_met.bigg_id.removeprefix("__").split("__", maxsplit=1)
-        except:
-            print(f"Failed to interpret bigg_id: {ua_met.bigg_id}")
-            continue
+    for bare_bigg_id, d in data.items():
         a_met = session.scalars(
             select(UniversalComponent)
             .filter(UniversalComponent.bigg_id == bare_bigg_id)
             .limit(1)
         ).first()
         if a_met is not None:
-            print(f"There already is a universal component '{bare_bigg_id}'")
             continue
-
-        d = data.get(ua_met.name.upper())
-        if d is None:
-            print(f"Could not find any info for '{bare_bigg_id}'")
-            print(f"Name: {ua_met.name}")
-            continue
-
-        ua_met_formulae = [(Formula(c.formula), c.charge) for c in ua_met.components]
-
-        print(f"# Found matching entry for {ua_met.bigg_id}")
-        print(ua_met.name)
 
         found_chebi = False
-        ua_chebi = d.get("chebi_id")
+        ua_chebi = d.get("CHEBI")
         if ua_chebi is not None:
             if not ua_chebi.startswith("CHEBI:"):
                 ua_chebi = f"CHEBI:{ua_chebi}"
             print("CHEBI in entry")
 
             found_chebi = find_chebi_in_db(
-                session, ua_chebi, ua_met_formulae, bare_bigg_id
+                session, ua_chebi, bare_bigg_id, bigg_id_assignments
             )
 
         if not found_chebi:
-            ua_inchikey = d.get("moldb_inchikey")
-            ua_inchi = d.get("moldb_inchi")
+            ua_inchikey = d.get("inchikey")
+            ua_inchi = d.get("inchi")
             if ua_inchikey is not None:
                 print("InChIKey in entry")
 
@@ -239,9 +215,10 @@ def main(data):
                     print("InChI in DB")
                     if len(inchi_match.reference_mappings) == 0:
                         print("No Component assigned yet")
-                        print(
-                            f'    "{bare_bigg_id}": {{ "chebis": "{inchi_match.bigg_id}" }},'
-                        )
+                        if bare_bigg_id in bigg_id_assignments:
+                            bigg_id_assignments[bare_bigg_id].add(inchi_match.bigg_id)
+                        else:
+                            bigg_id_assignments[bare_bigg_id] = {inchi_match.bigg_id}
                         continue
                     else:
                         print(
@@ -255,7 +232,7 @@ def main(data):
 
                         print("CHEBI found via InChIKey")
                         find_chebi_in_db(
-                            session, chebi_id, ua_met_formulae, bare_bigg_id
+                            session, chebi_id, bare_bigg_id, bigg_id_assignments
                         )
                     else:
                         print("InChIKey without known CHEBI")
@@ -283,11 +260,22 @@ def main(data):
     print("########")
     for k, v in inchi_definitions.items():
         if len(v) > 1:
-            print("@")
-            print(f'    "{k}": {json.dumps(v[0])},')
+            for vi in v:
+                print("@")
+                print(f'    "{k}": {json.dumps(vi)},')
+    print("########")
+    for k, v in bigg_id_assignments.items():
+        if len(v) == 1:
+            print(f'    "{k}": {json.dumps({"chebi": v.pop()})},')
+    print("########")
+    for k, v in bigg_id_assignments.items():
+        if len(v) > 1:
+            for vi in v:
+                print("@")
+                print(f'    "{k}": {json.dumps({"chebi": vi})},')
 
 
 if __name__ == "__main__":
     prepare_chebi()
-    data = read_ecmdb_file("ecmdb.json")
+    data = read_mnx_files("/datafiles/chem_xref.tsv", "/datafiles/chem_prop.tsv")
     main(data)

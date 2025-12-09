@@ -919,13 +919,12 @@ def load_metabolites(session, model_db_id, model):
                         new_universal_bigg_id = f"{base_universal_bigg_id}_DUP{i}"
                         new_bigg_id = create_component_bigg_id(
                             new_universal_bigg_id,
-                            charge=charge,
                             collection_bigg_id=collection_db.bigg_id,
                         )
-                        temp_comp_db = utils.get_object_by_bigg_id(
-                            session, new_bigg_id, Component
+                        temp_uni_comp_db = utils.get_object_by_bigg_id(
+                            session, new_bigg_id, UniversalComponent
                         )
-                        if temp_comp_db is None:
+                        if temp_uni_comp_db is None:
                             break
 
                     # make the new metabolite

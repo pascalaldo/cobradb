@@ -34,11 +34,22 @@ def push_metabolites(session: Session, data: Dict[str, Any]):
         if "complex" in bid_info:
             metabolites.create_complex_metabolite(session, bid, bid_info["complex"])
         else:
-            base_chebi = (
-                bid_info["chebi"] if "chebi" in bid_info else bid_info["chebis"][0]
-            )
-            ref_n = bid_info.get("reference_n")
-            metabolites.create_metabolite(session, bid, base_chebi, reference_n=ref_n)
+            if "chebi" in bid_info or "chebis" in bid_info:
+                base_chebi = (
+                    bid_info["chebi"] if "chebi" in bid_info else bid_info["chebis"][0]
+                )
+                ref_n = bid_info.get("reference_n")
+                print(f"Creating metabolite {bid} for {base_chebi}")
+                metabolites.create_metabolite(
+                    session, bid, base_chebi, reference_n=ref_n
+                )
+
+            if "inchi" in bid_info:
+                print("Creating entry for InChI")
+                inchis = bid_info["inchi"]
+                if isinstance(inchis, str):
+                    inchis = [{"string": inchis, "name": bid_info.get("name")}]
+                metabolites.create_metabolites_for_inchis(session, bid, inchis)
 
     for old_id, new_id in data.get("bigg_id_mapping", {}).items():
         metabolites.create_component_id_mapping(session, old_id, new_id)

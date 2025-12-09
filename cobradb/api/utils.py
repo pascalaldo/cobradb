@@ -5,9 +5,11 @@ import re
 
 from cobradb.models import BiGGBase
 
-FORMULA_PATTERN = re.compile(r"(([A-Z][a-z]?)([0-9])*)+")
-FORMULA_PATTERN_SINGLE = re.compile(r"([A-Z][a-z]?)([0-9]*)((?=[A-Z])|$)")
-FORMULA_DELTA_PATTERN_SINGLE = re.compile(r"([A-Z][a-z]?)([\+\-]?[0-9]*)((?=[A-Z])|$)")
+FORMULA_PATTERN = re.compile(r"(\.?([A-Z][a-z]?)([0-9])*)+")
+FORMULA_PATTERN_SINGLE = re.compile(r"([A-Z][a-z]?)([0-9]*)((?=[\.A-Z])|$)")
+FORMULA_DELTA_PATTERN_SINGLE = re.compile(
+    r"([A-Z][a-z]?)([\+\-]?[0-9]*)((?=[\.A-Z])|$)"
+)
 
 NFORMULA_PATTERN = re.compile(
     r"^(?P<static1>([A-Z][a-z]?[0-9]*)*)(\((?P<variable>([A-Z][a-z]?[0-9]*)+)\)n)?\.?(?P<static2>([A-Z][a-z]?[0-9]*)*)$"

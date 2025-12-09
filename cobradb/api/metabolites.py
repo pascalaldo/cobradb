@@ -1,8 +1,8 @@
 import logging
-from typing import Any, List, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
 
 from sqlalchemy import select
-from sqlalchemy.orm import Bundle, Session, subqueryload
+from sqlalchemy.orm import Bundle, Session, contains_eager, subqueryload
 
 from cobradb.data_sources import get_data_source_id
 from cobradb.models import (
@@ -232,6 +232,47 @@ def get_or_create_small_molecule_reference(
         add_chebi_annotations(session, chebi_db, chebi_entity)
 
     return False, chebi_db
+
+
+def create_small_molecule_reference_for_inchi(
+    session: Session,
+    ref_id: str,
+    inchi: InChI,
+    name: Optional[str],
+    cpd_cls: Type[SMRT] = ReferenceCompound,
+) -> SMRT:
+    """Create a small molecule reference based on a ChEBI ID. Can either create a ReferenceCompound or ReferenceReactivePart.
+
+    Arguments
+    ---------
+    session: SQLAlchemy session
+
+    chebi: ChEBI ID as a string (CHEBI:00000 format)
+
+    cpd_cls: Class of reference object to create. Default: ReferenceCompound."""
+
+    n_protons = inchi.n_protons()
+    if n_protons == 0:
+        formula = inchi.formula
+    else:
+        delta_h = utils.Formula({"H": n_protons})
+        formula = str(utils.Formula(inchi.formula) + delta_h)
+
+    cpd_dict = dict(
+        bigg_id=ref_id,
+        name=name,
+        html_name=name,
+        charge=str(inchi.charge()),
+        formula=formula,
+        inchi=inchi,
+    )
+    if cpd_cls is ReferenceCompound:
+        cpd_dict["compound_type"] = "small_molecule"
+
+    ref_db = cpd_cls(**cpd_dict)
+    session.add(ref_db)
+
+    return ref_db
 
 
 def add_chebi_annotations(
@@ -646,9 +687,12 @@ def create_complex_metabolite(
     return {"status": "success", "components_added": [full_bid]}
 
 
-def create_metabolites_for_inchis(session: Session, bid: str, inchis: List[str]):
+def create_metabolites_for_inchis(
+    session: Session, bid: str, inchis: List[Dict[str, str]]
+):
     inchi_objects = []
-    for inchi in inchis:
+    for inchi_d in inchis:
+        inchi = inchi_d["string"]
         inchi_obj = InChI.from_string(inchi)
         if inchi_obj is None:
             logging.error(f"Could not parse InChI string: '{inchi}'")
@@ -662,9 +706,10 @@ def create_metabolites_for_inchis(session: Session, bid: str, inchis: List[str])
         if any(x == inchi_obj for x in possible_matches):
             logging.error(f"InChI is already in database: '{inchi}'")
             continue
-        inchi_objects.append(inchi_obj)
+        inchi_objects.append((inchi_obj, inchi_d.get("name")))
     existing_components = session.scalars(
         select(Component)
+        .options(contains_eager(Component.universal_component))
         .join(Component.universal_component)
         .filter(UniversalComponent.bigg_id == bid)
     ).all()
@@ -694,7 +739,68 @@ def create_metabolites_for_inchis(session: Session, bid: str, inchis: List[str])
                     logging.error(
                         f"Existing component '{existing_component.bigg_id}' with reference {ref_map.reference_compound.bigg_id} has conflicting InChI associated."
                     )
-                    return
+                    # return
+            new_charge = ref_map.reference_compound.inchi.charge()
+            existing_charges.add(new_charge)
+
+    universal_component_db = None
+    if len(existing_components) > 0:
+        universal_component_db = existing_components[0].universal_component
+    for inchi_obj, name in inchi_objects:
+        if common_key_major is None:
+            common_key_major = inchi_obj.key_major
+            common_key_minor = inchi_obj.key_minor
+        else:
+            if (
+                common_key_major != inchi_obj.key_major
+                or common_key_minor != inchi_obj.key_minor
+            ):
+                logging.error(
+                    f"Provided InChI {inchi_obj.to_string()} conflicts with existing InChI references. Creating reference anyway."
+                )
+                # return
+        new_charge = inchi_obj.charge()
+        if new_charge in existing_charges:
+            logging.error(
+                f"An InChI reference with charge {new_charge} already exists for this molecule."
+            )
+            return
+
+        if universal_component_db is None:
+            universal_component_db = _create_universal_component(
+                session,
+                bigg_id=bid,
+                name=name,
+            )
+            session.commit()
+
+        full_bid = bigg_ids_api.create_component_bigg_id(bid, charge=new_charge)
+        reference_bigg_id = f"BIGGR:{full_bid}"
+        reference_db = create_small_molecule_reference_for_inchi(
+            session, reference_bigg_id, inchi_obj, name
+        )
+        component_db = _create_component(
+            session, full_bid, universal_component_db, reference_db
+        )
+        session.commit()
+        if component_db is None:
+            continue
+
+        component_ref_mapping_db = ComponentReferenceMapping(
+            universal_component=universal_component_db,
+            reference_compound=reference_db,
+        )
+        component_db.reference_mappings.append(component_ref_mapping_db)
+
+        if len(universal_component_db.components) == 1:
+            universal_component_ref_mapping_db = UniversalComponentReferenceMapping(
+                id=universal_component_db.id, mapping=component_ref_mapping_db
+            )
+            session.add(universal_component_ref_mapping_db)
+            universal_component_db.default_component = component_db
+        session.commit()
+
+        existing_charges.add(new_charge)
 
 
 def create_collection_specific_metabolite(

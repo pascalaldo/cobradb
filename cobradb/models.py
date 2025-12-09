@@ -209,9 +209,20 @@ class InChI(Base):
                 return False
         return True
 
+    def n_protons(self):
+        return 0 if self.p is None else int(self.p)
+
     def charge(self):
-        n_protons = 0 if self.p is None else int(self.p)
-        base_charge = 0 if self.q is None else int(self.q)
+        n_protons = self.n_protons()
+        base_charge = 0
+        if self.q is not None:
+            if ";" in self.q:
+                for charge in self.q.split(";"):
+                    if not charge:
+                        continue
+                    base_charge += int(charge)
+            else:
+                base_charge = int(self.q)
         return base_charge + n_protons
 
 

@@ -137,6 +137,8 @@ def load_assembly(assembly_id, assembly_path, chromosome_accessions, session):
                     continue
                 logging.info(f"Loading chromosome [{i+1} of ?] {record.id}")
                 load_chromosome(session, record, genome_db_id)
+
+    genome_db = session.get(Genome, genome_db_id)
     if not genome_db.organism:
         organism_info = ncbi_data.get_organism_for_ncbi_assembly_accession(
             genome_db.accession_value
