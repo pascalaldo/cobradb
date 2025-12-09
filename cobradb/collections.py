@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, List
 from sqlalchemy import and_, literal, or_, select
 from sqlalchemy.orm import Session
@@ -50,6 +51,7 @@ def find_common_parent_for_taxons(session: Session, tax_id_1: int, tax_id_2: int
 def update_collection_data(session: Session, collection_list: List[Dict[str, Any]]):
     collections_db = session.scalars(select(ModelCollection))
     for collection in collections_db:
+        logging.warning(f"Updating collection {collection.bigg_id}")
         collection_data = next(
             (x for x in collection_list if x.get("bigg_id") == collection.bigg_id), {}
         )
@@ -65,13 +67,19 @@ def update_collection_data(session: Session, collection_list: List[Dict[str, Any
                 tax_id = None
 
         if tax_id is not None:
+            logging.warning("Tax ID provided")
             collection.taxon_id = tax_id
         else:
+            logging.warning("Tax ID not provided")
             if collection.taxon_id is None:
+                logging.warning("Tax ID None")
                 # Find common parent
                 parent_tax_id = None
                 for model in collection.models:
-                    if model.taxon_id is None:
+                    logging.warning(
+                        f"Model {model.bigg_id}: {model.taxon_id} (parent: {parent_tax_id})"
+                    )
+                    if model.taxon_id is None or model.taxon_id == parent_tax_id:
                         continue
                     if parent_tax_id is None:
                         parent_tax_id = model.taxon_id
@@ -79,6 +87,7 @@ def update_collection_data(session: Session, collection_list: List[Dict[str, Any
                         parent_tax_id = find_common_parent_for_taxons(
                             session, parent_tax_id, model.taxon_id
                         )
+                logging.warning(f"Parent Tax ID: {parent_tax_id}")
                 if parent_tax_id is not None:
                     collection.taxon_id = parent_tax_id
 

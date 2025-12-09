@@ -209,6 +209,22 @@ class InChI(Base):
                 return False
         return True
 
+    def n_protons(self):
+        return 0 if self.p is None else int(self.p)
+
+    def charge(self):
+        n_protons = self.n_protons()
+        base_charge = 0
+        if self.q is not None:
+            if ";" in self.q:
+                for charge in self.q.split(";"):
+                    if not charge:
+                        continue
+                    base_charge += int(charge)
+            else:
+                base_charge = int(self.q)
+        return base_charge + n_protons
+
 
 def _raise_when_no_value_specified():
     raise ValueError("A specific value should be set.")
@@ -406,6 +422,7 @@ class UniversalComponent(Base, BiGGBase):
         foreign_keys=[default_component_id],
         post_update=True,
     )
+    allow_flexible_variants: Mapped[bool] = mapped_column(default=False)
 
     name: Mapped[Optional[str]]
     components: Mapped[List["Component"]] = relationship(
@@ -455,6 +472,7 @@ class Component(Base, BiGGBase):
     # type = Column(String(20))
     formula: Mapped[Optional[str]]
     charge: Mapped[int]
+    variant: Mapped[int] = mapped_column(default=0)
 
     collection_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("model_collection.id")
@@ -482,7 +500,7 @@ class Component(Base, BiGGBase):
     @staticmethod
     def charge_to_string(coefficient):
         if coefficient is None:
-            return 0
+            return str(0)
         if isinstance(coefficient, str):
             return coefficient
         if isinstance(coefficient, int):
@@ -492,6 +510,7 @@ class Component(Base, BiGGBase):
                 return str(int(coefficient))
             else:
                 return str(coefficient)
+        raise ValueError()
 
     def __repr__(self):
         return f"Component ({self.id}): {self.name}"
@@ -518,6 +537,7 @@ class ComponentReferenceMapping(Base):
     )
 
     reference_n: Mapped[Optional[int]]
+    reference_formula_delta: Mapped[Optional[str]]
 
     universal_component_reference_mapping: Mapped[
         Optional["UniversalComponentReferenceMapping"]
@@ -1435,18 +1455,25 @@ class UniversalReaction(Base, BiGGBase):
             else:
                 cc_id = c.universal_compartmentalized_component.bigg_id
                 coeff = c.coefficient
-            comp_dict[cc_id] = comp_dict.get(cc_id, 0) + coeff
+            prev_coeffs = comp_dict.get(cc_id, (0, 0))
+            if coeff > 0:
+                comp_dict[cc_id] = (prev_coeffs[0], prev_coeffs[1] + coeff)
+            else:
+                comp_dict[cc_id] = (prev_coeffs[0] - coeff, prev_coeffs[1])
+
             # if comp_dict[cc_id] == 0:
             #     del comp_dict[cc_id]
-        sorting_1 = sorted(comp_dict.items(), key=lambda x: (x[0], abs(x[1])))
+        sorting_1 = sorted(
+            comp_dict.items(), key=lambda x: (x[0], abs(x[1][1] - x[1][0]))
+        )
         first_item = next(iter(sorting_1))
-        if first_item[1] > 0:
-            comp_dict = {k: -1 * v for k, v in comp_dict.items()}
+        if first_item[1][1] > first_item[1][0]:
+            comp_dict = {k: (v[1], v[0]) for k, v in comp_dict.items()}
         hash_str = "/".join(
-            f"{Reaction.coefficient_to_string(coeff)}${cc_id}"
+            f"-{Reaction.coefficient_to_string(coeff[0])}+{Reaction.coefficient_to_string(coeff[1])}${cc_id}"
             for cc_id, coeff in sorted(
                 comp_dict.items(),
-                key=itemgetter(0, 1),
+                key=lambda x: (x[0], x[1][0], x[1][1]),
             )
         )
         if len(hash_str) > HASH_STR_MAX_LEN:

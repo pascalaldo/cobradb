@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
-from sqlalchemy.orm import Session, contains_eager, joinedload
+from sqlalchemy.orm import Session, contains_eager, joinedload, subqueryload, aliased
+from cobradb.api import metabolites
 from cobradb.api.bigg_ids import create_component_bigg_id
 from cobradb.api.metabolites import (
     create_collection_specific_metabolite,
+    get_or_create_compartmentalized_component,
     get_universal_component_by_bigg_id,
 )
 from cobradb.api.reactions import (
@@ -20,6 +22,7 @@ from cobradb.models import (
     Compartment,
     CompartmentalizedComponent,
     Component,
+    ComponentReferenceMapping,
     Gene,
     GeneReactionMatrix,
     Genome,
@@ -36,6 +39,7 @@ from cobradb.models import (
     Synonym,
     Taxon,
     UniversalCompartmentalizedComponent,
+    UniversalComponent,
     UniversalReaction,
 )
 from cobradb import settings
@@ -117,6 +121,7 @@ def load_model_assemblies_json(
                     print(f"Assembly file not found: {assembly_file}")
                     assemblies[model_assembly] = None
             elif model_assembly[0] == "pankb_assembly":
+                logging.warning(f"PanKB assembly: {model_assembly[1]}")
                 assemblies[model_assembly] = None
 
         model_entry["assembly"] = model_assembly
@@ -500,7 +505,6 @@ def load_metabolites(session, model_db_id, model):
     compartmentalized metabolite IDs.
 
     """
-    final_metabolite_ids = {}
 
     model_db = session.get(Model, model_db_id)
     collection_db = session.get(ModelCollection, model_db.collection_id)
@@ -605,9 +609,8 @@ def load_metabolites(session, model_db_id, model):
                 .limit(1)
             ).first()
         ) is not None:
-            charge_zero = 0 if charge is None else charge
             if (
-                metabolite_db.charge != charge_zero
+                metabolite_db.charge != charge
                 or not utils.are_explicit_formulae_equivalent(
                     metabolite_db.formula, formula
                 )
@@ -616,6 +619,83 @@ def load_metabolites(session, model_db_id, model):
                     f"Found component, but charge or formula did not match: {metabolite_db} (charge: {metabolite_db.charge}, formula: {metabolite_db.formula}) != (charge: {charge}, formula: {formula})"
                 )
                 metabolite_db = None
+
+        if metabolite_db is None and formula is not None:
+            _universal_component_db = session.scalars(
+                select(UniversalComponent)
+                .options(
+                    subqueryload(
+                        UniversalComponent.components.and_(
+                            Component.collection_id == None
+                        )
+                    )
+                    .subqueryload(Component.reference_mappings)
+                    .joinedload(ComponentReferenceMapping.reference_compound)
+                )
+                .filter(UniversalComponent.bigg_id == new_universal_bigg_id)
+                .limit(1)
+            ).first()
+            comp_formula = utils.Formula(formula)
+            if (
+                _universal_component_db is not None
+                and _universal_component_db.allow_flexible_variants
+            ):
+                formula_delta_variant_mapping = {}
+                for _comp_db in _universal_component_db.components:
+                    if len(_comp_db.reference_mappings) != 1:
+                        continue
+                    delta_formula = _comp_db.reference_mappings[
+                        0
+                    ].reference_formula_delta
+                    if delta_formula not in formula_delta_variant_mapping:
+                        formula_delta_variant_mapping[delta_formula] = _comp_db.variant
+                    if _comp_db.charge != charge:
+                        continue
+                    if comp_formula == utils.Formula(_comp_db.formula):
+                        metabolite_db = _comp_db
+                        break
+                if metabolite_db is None:
+                    for _comp_db in _universal_component_db.components:
+                        if _comp_db.charge != charge:
+                            continue
+                        if len(_comp_db.reference_mappings) != 1:
+                            continue
+                        reference_db = _comp_db.reference_mappings[0].reference_compound
+                        ref_formula = utils.Formula(reference_db.formula)
+                        delta_formula = comp_formula - ref_formula
+
+                        if (
+                            delta_formula_str := str(delta_formula)
+                        ) in formula_delta_variant_mapping:
+                            variant = formula_delta_variant_mapping[delta_formula_str]
+                        else:
+                            variant = max(formula_delta_variant_mapping.values()) + 1
+
+                        full_bid = create_component_bigg_id(
+                            new_universal_bigg_id, variant=variant, charge=charge
+                        )
+                        metabolite_db = metabolites._create_component(
+                            session,
+                            full_bid,
+                            _universal_component_db,
+                            formula=formula,
+                            variant=variant,
+                            charge=charge,
+                            name=reference_db.name,
+                        )
+                        if metabolite_db is None:
+                            raise ValueError()
+                        component_ref_mapping_db = ComponentReferenceMapping(
+                            universal_component=_universal_component_db,
+                            reference_compound=reference_db,
+                            reference_formula_delta=delta_formula_str,
+                        )
+                        metabolite_db.reference_mappings.append(
+                            component_ref_mapping_db
+                        )
+                        session.add(metabolite_db)
+                        session.commit()
+                        break
 
         # if necessary, add the new metabolite, and keep track of the ID
         if metabolite_db is None:
@@ -653,6 +733,7 @@ def load_metabolites(session, model_db_id, model):
             universal_component_db.bigg_id,
             compartment_bigg_id=compartment_db.bigg_id,
             charge=metabolite_db.charge,
+            variant=metabolite_db.variant,
         )
 
         # if there is no universal compartmentalized component, add a new one
@@ -721,6 +802,7 @@ def load_metabolites(session, model_db_id, model):
                         mcc_db.compartmentalized_component.component.universal_component.bigg_id,
                         compartment_bigg_id=compartment_db.bigg_id,
                         charge=mcc_db.compartmentalized_component.component.charge,
+                        variant=mcc_db.compartmentalized_component.component.variant,
                     )
                 if mcc_db.compartmentalized_component == comp_component_db:
                     mcc_duplicates += 1
@@ -730,6 +812,7 @@ def load_metabolites(session, model_db_id, model):
                         universal_component_db.bigg_id,
                         compartment_bigg_id=compartment_db.bigg_id,
                         charge=metabolite_db.charge,
+                        variant=metabolite_db.variant,
                     )
                 else:
                     model_comp_comp_id = universal_comp_component_db.bigg_id
@@ -742,63 +825,157 @@ def load_metabolites(session, model_db_id, model):
                 session.add(model_comp_comp_db)
             else:
                 print(
-                    "Duplicate metabolite in model, creating a model-specific metabolite entry."
+                    f"Duplicate metabolite in model, creating a model-specific metabolite entry. (metabolite_id: {metabolite_id}, {new_universal_bigg_id})"
                 )
+                metabolite_db = None
                 base_universal_bigg_id = new_universal_bigg_id
-                new_universal_bigg_id = f"{base_universal_bigg_id}_DUP1"
-                for i in range(1, 100):
-                    new_universal_bigg_id = f"{base_universal_bigg_id}_DUP{i}"
-                    new_bigg_id = create_component_bigg_id(
-                        new_universal_bigg_id,
+
+                # Try to use the same duplicate component as in the same model, but with different compartment
+                component_bigg_id_pattern = create_component_bigg_id(
+                    f"{base_universal_bigg_id}_DUP%",
+                    charge=charge,
+                    collection_bigg_id=collection_db.bigg_id,
+                )
+                model_compartmentalized_components_db = session.scalars(
+                    select(ModelCompartmentalizedComponent)
+                    .options(
+                        contains_eager(
+                            ModelCompartmentalizedComponent.compartmentalized_component
+                        ).contains_eager(CompartmentalizedComponent.component)
+                    )
+                    .join(ModelCompartmentalizedComponent.compartmentalized_component)
+                    .join(CompartmentalizedComponent.component)
+                    .filter(Component.bigg_id.like(component_bigg_id_pattern))
+                    .filter(ModelCompartmentalizedComponent.model_id == model_db.id)
+                ).all()
+                for model_comp_comp_db in model_compartmentalized_components_db:
+                    if (
+                        model_comp_comp_db.compartmentalized_component.compartment_id
+                        == compartment_db.id
+                    ):
+                        continue
+                    other_bigg_id, other_compartment_id = parse.split_compartment(
+                        model_comp_comp_db.id_in_original_model
+                    )
+                    if other_bigg_id == base_universal_bigg_id:
+                        metabolite_db = (
+                            model_comp_comp_db.compartmentalized_component.component
+                        )
+                        break
+
+                if metabolite_db is None:
+                    # Try to use the same duplicate component as in other models in the collection
+                    component_bigg_id_pattern = create_component_bigg_id(
+                        f"{base_universal_bigg_id}_DUP%",
                         charge=charge,
                         collection_bigg_id=collection_db.bigg_id,
                     )
-                    temp_comp_db = utils.get_object_by_bigg_id(
-                        session, new_bigg_id, Component
-                    )
-                    if temp_comp_db is None:
-                        break
 
-                # make the new metabolite
-                universal_component_db, metabolite_db = (
-                    create_collection_specific_metabolite(
-                        bigg_id=new_universal_bigg_id,
-                        collection_db=collection_db,
-                        charge=charge,
-                        formula=formula,
-                        name="",
-                        session=session,
+                    met_same_model_subq = (
+                        select(Component.id.label("comp_id"))
+                        .filter(Component.bigg_id.like(component_bigg_id_pattern))
+                        .join(Component.compartmentalized_components)
+                        .join(
+                            CompartmentalizedComponent.model_compartmentalized_components
+                        )
+                        .filter(
+                            ModelCompartmentalizedComponent.id_in_original_model
+                            == metabolite_id
+                        )
+                        .filter(ModelCompartmentalizedComponent.model_id == model_db.id)
+                        .group_by(Component.id)
+                        .having(func.count(ModelCompartmentalizedComponent.id) > 0)
+                    ).subquery()
+                    met_query = (
+                        select(Component.id)
+                        .filter(Component.bigg_id.like(component_bigg_id_pattern))
+                        .join(Component.compartmentalized_components)
+                        .join(
+                            CompartmentalizedComponent.model_compartmentalized_components
+                        )
+                        .filter(
+                            ModelCompartmentalizedComponent.id_in_original_model
+                            == metabolite_id
+                        )
+                        .filter(ModelCompartmentalizedComponent.model_id != model_db.id)
+                        .group_by(Component.id)
+                        .having(func.count(ModelCompartmentalizedComponent.id) > 0)
+                        .join(
+                            met_same_model_subq,
+                            met_same_model_subq.c.comp_id == Component.id,
+                            isouter=True,
+                        )
+                        .filter(met_same_model_subq.c.comp_id == None)
+                        .limit(1)
                     )
-                )
-                if universal_component_db is None or metabolite_db is None:
-                    raise ValueError()
+                    metabolite_db_id = session.scalars(met_query).first()
+                    if metabolite_db_id is not None:
+                        metabolite_db = session.get(Component, metabolite_db_id)
+
+                if metabolite_db is None:
+                    print("Creating new duplicate")
+                    new_universal_bigg_id = f"{base_universal_bigg_id}_DUP1"
+                    for i in range(1, 100):
+                        new_universal_bigg_id = f"{base_universal_bigg_id}_DUP{i}"
+                        new_bigg_id = create_component_bigg_id(
+                            new_universal_bigg_id,
+                            collection_bigg_id=collection_db.bigg_id,
+                        )
+                        temp_uni_comp_db = utils.get_object_by_bigg_id(
+                            session, new_bigg_id, UniversalComponent
+                        )
+                        if temp_uni_comp_db is None:
+                            break
+
+                    # make the new metabolite
+                    universal_component_db, metabolite_db = (
+                        create_collection_specific_metabolite(
+                            bigg_id=new_universal_bigg_id,
+                            collection_db=collection_db,
+                            charge=charge,
+                            formula=formula,
+                            name="",
+                            session=session,
+                        )
+                    )
+                    if universal_component_db is None or metabolite_db is None:
+                        raise ValueError()
+                    comp_comp_id = create_component_bigg_id(
+                        universal_component_db.bigg_id,
+                        compartment_bigg_id=compartment_db.bigg_id,
+                        charge=metabolite_db.charge,
+                        variant=metabolite_db.variant,
+                    )
+                    universal_comp_comp_id = create_component_bigg_id(
+                        universal_component_db.bigg_id,
+                        compartment_bigg_id=compartment_db.bigg_id,
+                    )
+                    universal_comp_component_db = UniversalCompartmentalizedComponent(
+                        bigg_id=universal_comp_comp_id,
+                        universal_component=universal_component_db,
+                        compartment=compartment_db,
+                    )
+                    session.add(universal_comp_component_db)
+                    comp_component_db = CompartmentalizedComponent(
+                        bigg_id=comp_comp_id,
+                        component=metabolite_db,
+                        universal_compartmentalized_component=universal_comp_component_db,
+                        compartment=compartment_db,
+                    )
+                    session.add(comp_component_db)
+                else:
+                    universal_component_db = session.get(
+                        UniversalComponent, metabolite_db.universal_component_id
+                    )
+                    comp_component_db = get_or_create_compartmentalized_component(
+                        session, metabolite_db, compartment_db
+                    )
+
                 model_comp_comp_id = create_component_bigg_id(
                     universal_component_db.bigg_id,
                     compartment_bigg_id=compartment_db.bigg_id,
                     # charge=metabolite_db.charge,
                 )
-                comp_comp_id = create_component_bigg_id(
-                    universal_component_db.bigg_id,
-                    compartment_bigg_id=compartment_db.bigg_id,
-                    charge=metabolite_db.charge,
-                )
-                universal_comp_comp_id = create_component_bigg_id(
-                    universal_component_db.bigg_id,
-                    compartment_bigg_id=compartment_db.bigg_id,
-                )
-                universal_comp_component_db = UniversalCompartmentalizedComponent(
-                    bigg_id=universal_comp_comp_id,
-                    universal_component=universal_component_db,
-                    compartment=compartment_db,
-                )
-                session.add(universal_comp_component_db)
-                comp_component_db = CompartmentalizedComponent(
-                    bigg_id=comp_comp_id,
-                    component=metabolite_db,
-                    universal_compartmentalized_component=universal_comp_component_db,
-                    compartment=compartment_db,
-                )
-                session.add(comp_component_db)
                 model_comp_comp_db = ModelCompartmentalizedComponent(
                     bigg_id=model_comp_comp_id,
                     model=model_db,
@@ -972,6 +1149,7 @@ def load_reactions(
                 ).first()
             else:
                 # Check for exchange reactions
+                reaction_collection_id = None
                 is_exchange = False
                 if (
                     len(participants) == 1
@@ -991,8 +1169,13 @@ def load_reactions(
                             f"EX_{universal_compartmentalized_component_bigg_id}"
                         )
                     is_exchange = True
+                    if (
+                        collection_id := universal_participants[
+                            0
+                        ].universal_compartmentalized_component.universal_component.collection_id
+                    ) is not None:
+                        reaction_collection_id = collection_id
 
-                reaction_collection_id = None
                 if not is_exchange:
                     print("! Creating collection-specific reaction.")
                     clean_reaction_id = (
@@ -1016,6 +1199,25 @@ def load_reactions(
                 )
 
                 session.commit()
+                print(f"Collection id: {reaction_collection_id} ({collection_db.id})")
+                if universal_reaction_db is not None:
+                    print(f"Created universal reaction")
+                    print(
+                        f"Hash of created universal_reaction: '{universal_reaction_db.hash}'"
+                    )
+                    print(
+                        f"Expected hash of universal_reaction: '{universal_reaction_hash}'"
+                    )
+                else:
+                    print("Did not create universal_reaction")
+
+                if reaction_db is not None:
+                    print(f"Created reaction")
+                    print(f"Hash of created reaction: '{reaction_db.hash}'")
+                    print(f"Expected hash of reaction: '{reaction_hash}'")
+                else:
+                    print("Did not create reaction")
+
                 reaction_db = session.scalars(
                     select(Reaction)
                     .filter(
@@ -1028,6 +1230,7 @@ def load_reactions(
                     .join(Reaction.universal_reaction)
                     .limit(1)
                 ).first()
+                print(f"Retreived reaction: {reaction_db}")
 
         if reaction_db is None:
             print("ERROR: Reaction was not correctly created.")

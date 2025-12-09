@@ -60,6 +60,16 @@ def parse_structures():
     print("Successfully loaded all CHEBI InChI Keys and SMILES structures.")
 
 
+def get_chebi_for_inchikey(inchikey: str):
+    for chebi_id, structure in chebi_parsers.__INCHI_KEYS.items():
+        s_obj = structure.get_structure()
+        if not isinstance(s_obj, str):
+            continue
+        if s_obj.startswith(inchikey):
+            return chebi_id
+    return None
+
+
 class ChebiEntity(lcpChebiEntity):
     """Class changing some default behavior of ChebiEntity, since the original often fails."""
 

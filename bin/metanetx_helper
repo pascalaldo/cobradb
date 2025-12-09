@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+
+import os
+import time
+import logging
+import shutil
+from pathlib import Path
+
+os.environ["LIBCHEBIPY_DOWNLOAD_DIR"] = "/chebi"
+
+from cobradb.chebi import ChebiEntity, get_chebi_for_inchikey, parse_structures
+
+from sqlalchemy import select
+from sqlalchemy.orm import close_all_sessions, subqueryload
+
+from cobradb.models import (
+    Component,
+    ComponentReferenceMapping,
+    InChI,
+    ReferenceCompound,
+    Session,
+    UniversalComponent,
+)
+from cobradb.api.utils import Formula
+import json
+
+
+def prepare_chebi():
+    logging.warning("Preparing chebi.")
+    # Workaround because setting the environment variable does not seem to change anything.
+    chebi_cache_path = Path("/libChEBI")
+    chebi_new_cache_path = Path("/chebi/libChEBI")
+    chebi_new_cache_path.mkdir(parents=True, exist_ok=True)
+    if chebi_cache_path.exists():
+        if not chebi_cache_path.is_symlink():
+            shutil.rmtree(chebi_cache_path)
+            chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
+    else:
+        chebi_cache_path.symlink_to(chebi_new_cache_path, target_is_directory=True)
+    # Make sure all cache files are downloaded
+    for i in range(10):
+        failed = False
+        try:
+            # Load a random chebi entity and access all relevant information.
+            # Will download all appropriate files for all compounds.
+            c = ChebiEntity("CHEBI:27732")
+            parse_structures()
+            c.get_id()
+            c.get_charge()
+            c.get_names()
+            c.get_incomings()
+            c.get_inchi()
+            c.get_database_accessions()
+            c.get_smiles()
+        except:
+            failed = True
+        if not failed:
+            break
+        time.sleep(2)  # wait 2 seconds and try again
+
+
+def find_chebi_in_db(session, ua_chebi, bare_bigg_id, bigg_id_assignments):
+    chebi_match = session.scalars(
+        select(ReferenceCompound)
+        .options(
+            subqueryload(ReferenceCompound.reference_mappings).joinedload(
+                ComponentReferenceMapping.component
+            )
+        )
+        .filter(ReferenceCompound.bigg_id == ua_chebi)
+        .limit(1)
+    ).first()
+    if (
+        chebi_match is not None
+        and chebi_match.formula is not None
+        and chebi_match.charge is not None
+    ):
+        print("CHEBI in DB")
+        if len(chebi_match.reference_mappings) == 0:
+            print("No Component assigned yet")
+            if bare_bigg_id in bigg_id_assignments:
+                bigg_id_assignments[bare_bigg_id].add(ua_chebi)
+            else:
+                bigg_id_assignments[bare_bigg_id] = {ua_chebi}
+            return True
+        else:
+            print(
+                f"Already assigned to {chebi_match.reference_mappings[0].component.bigg_id}"
+            )
+    else:
+        print("CHEBI not yet in DB")
+        try:
+            c = ChebiEntity(ua_chebi)
+        except:
+            c = None
+        if not c:
+            print(f"Could not load {ua_chebi}")
+        else:
+            try:
+                charge = int(c.get_charge())
+                formula = Formula(c.get_formula())
+            except:
+                print("Could not interpret charge or formula")
+                charge = None
+                formula = None
+
+            if charge is not None and formula is not None:
+                print("Formula and charge available")
+                if bare_bigg_id in bigg_id_assignments:
+                    bigg_id_assignments[bare_bigg_id].add(ua_chebi)
+                else:
+                    bigg_id_assignments[bare_bigg_id] = {ua_chebi}
+                return True
+    return False
+
+
+def read_mnx_files(xref_filename, prop_filename):
+    mnx_info = {}
+    with open(xref_filename, "r") as f:
+        for l in f:
+            if l.startswith("#"):
+                continue
+            try:
+                external_id, mnx_id, _ = l.split("\t")
+            except:
+                continue
+            if external_id.startswith("bigg.metabolite:"):
+                mnx_info[mnx_id] = mnx_info.get(mnx_id, {}) | {
+                    "bigg": external_id.removeprefix("bigg.metabolite:")
+                }
+            elif external_id.startswith("CHEBI:"):
+                mnx_info[mnx_id] = mnx_info.get(mnx_id, {}) | {"CHEBI": external_id}
+    # bigg_to_chebi = {m["bigg"]: m["CHEBI"] for m in mnx_info.values() if "bigg" in m and "CHEBI" in m}
+    with open(prop_filename, "r") as f:
+        for l in f:
+            if l.startswith("#"):
+                continue
+            try:
+                (
+                    mnx_id,
+                    name,
+                    ref_comp,
+                    formula,
+                    charge,
+                    mass,
+                    inchi,
+                    inchikey,
+                    smiles,
+                ) = l.split("\t")
+            except:
+                continue
+            if formula.strip().endswith("*"):
+                continue
+            if not inchi.strip():
+                continue
+            if not inchikey.strip():
+                continue
+            mnx_info[mnx_id] = mnx_info.get(mnx_id, {}) | {
+                "name": name,
+                "charge": charge,
+                "formula": formula,
+                "inchi": inchi,
+                "inchikey": inchikey,
+            }
+    bigg_info = {m["bigg"]: m for m in mnx_info.values() if "bigg" in m}
+    return bigg_info
+
+
+def main(data):
+    # make the session
+    session = Session()
+    inchi_definitions = {}
+    bigg_id_assignments = {}
+
+    for bare_bigg_id, d in data.items():
+        a_met = session.scalars(
+            select(UniversalComponent)
+            .filter(UniversalComponent.bigg_id == bare_bigg_id)
+            .limit(1)
+        ).first()
+        if a_met is not None:
+            continue
+
+        found_chebi = False
+        ua_chebi = d.get("CHEBI")
+        if ua_chebi is not None:
+            if not ua_chebi.startswith("CHEBI:"):
+                ua_chebi = f"CHEBI:{ua_chebi}"
+            print("CHEBI in entry")
+
+            found_chebi = find_chebi_in_db(
+                session, ua_chebi, bare_bigg_id, bigg_id_assignments
+            )
+
+        if not found_chebi:
+            ua_inchikey = d.get("inchikey")
+            ua_inchi = d.get("inchi")
+            if ua_inchikey is not None:
+                print("InChIKey in entry")
+
+                ua_inchikey_without_proton = "-".join(ua_inchikey.split("-")[:2])
+
+                inchi_match = session.scalars(
+                    select(ReferenceCompound)
+                    .options(
+                        subqueryload(ReferenceCompound.reference_mappings).joinedload(
+                            ComponentReferenceMapping.component
+                        )
+                    )
+                    .join(ReferenceCompound.inchi)
+                    .filter(InChI.key.like(f"{ua_inchikey_without_proton}%"))
+                    .limit(1)
+                ).first()
+                if inchi_match is not None:
+                    print("InChI in DB")
+                    if len(inchi_match.reference_mappings) == 0:
+                        print("No Component assigned yet")
+                        if bare_bigg_id in bigg_id_assignments:
+                            bigg_id_assignments[bare_bigg_id].add(inchi_match.bigg_id)
+                        else:
+                            bigg_id_assignments[bare_bigg_id] = {inchi_match.bigg_id}
+                        continue
+                    else:
+                        print(
+                            f"Already assigned to {inchi_match.reference_mappings[0].component.bigg_id}"
+                        )
+                else:
+                    print("InChI not yet in DB")
+                    chebi_for_inchi = get_chebi_for_inchikey(ua_inchikey_without_proton)
+                    if chebi_for_inchi is not None:
+                        chebi_id = f"CHEBI:{chebi_for_inchi}"
+
+                        print("CHEBI found via InChIKey")
+                        find_chebi_in_db(
+                            session, chebi_id, bare_bigg_id, bigg_id_assignments
+                        )
+                    else:
+                        print("InChIKey without known CHEBI")
+                        print(f"InChIKey={ua_inchikey}")
+                        if ua_inchi is not None:
+                            name = d.get("name")
+                            def_obj = {"inchi": ua_inchi}
+                            if name is not None:
+                                def_obj["name"] = name
+                            if bare_bigg_id in inchi_definitions:
+                                for idef in inchi_definitions[bare_bigg_id]:
+                                    if idef == def_obj:
+                                        break
+                                else:
+                                    inchi_definitions[bare_bigg_id].append(def_obj)
+                            else:
+                                inchi_definitions[bare_bigg_id] = [def_obj]
+    session.close()
+    close_all_sessions()
+
+    print("########")
+    for k, v in inchi_definitions.items():
+        if len(v) == 1:
+            print(f'    "{k}": {json.dumps(v[0])},')
+    print("########")
+    for k, v in inchi_definitions.items():
+        if len(v) > 1:
+            for vi in v:
+                print("@")
+                print(f'    "{k}": {json.dumps(vi)},')
+    print("########")
+    for k, v in bigg_id_assignments.items():
+        if len(v) == 1:
+            print(f'    "{k}": {json.dumps({"chebi": v.pop()})},')
+    print("########")
+    for k, v in bigg_id_assignments.items():
+        if len(v) > 1:
+            for vi in v:
+                print("@")
+                print(f'    "{k}": {json.dumps({"chebi": vi})},')
+
+
+if __name__ == "__main__":
+    prepare_chebi()
+    data = read_mnx_files("/datafiles/chem_xref.tsv", "/datafiles/chem_prop.tsv")
+    main(data)

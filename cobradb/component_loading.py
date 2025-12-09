@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Set
 from cobradb.models import AlreadyLoadedError, Gene, Genome, Chromosome, Synonym
 from cobradb.util import scrub_gene_id, get_or_create_data_source, get_or_create, timing
+from cobradb import ncbi_data
 
 from sqlalchemy import select, func
 import logging
@@ -121,21 +122,32 @@ def load_assembly(assembly_id, assembly_path, chromosome_accessions, session):
 
     if assembly_path is None:
         logging.warning(f"No assembly file found for {assembly_id}")
-        return
-    open_f = open
-    if Path(assembly_path).suffix == ".gz":
-        open_f = gzip.open
-    with open_f(assembly_path, "rt") as f:
-        gb_file = _load_gb_file(f)
-        for i, record in enumerate(gb_file):
-            if (
-                chromosome_accessions is not None
-                and record.id not in chromosome_accessions
-            ):
-                logging.warning(f"Skipping chromosome [{i+1} of ?] {record.id}")
-                continue
-            logging.info(f"Loading chromosome [{i+1} of ?] {record.id}")
-            load_chromosome(session, record, genome_db_id)
+    else:
+        open_f = open
+        if Path(assembly_path).suffix == ".gz":
+            open_f = gzip.open
+        with open_f(assembly_path, "rt") as f:
+            gb_file = _load_gb_file(f)
+            for i, record in enumerate(gb_file):
+                if (
+                    chromosome_accessions is not None
+                    and record.id not in chromosome_accessions
+                ):
+                    logging.warning(f"Skipping chromosome [{i+1} of ?] {record.id}")
+                    continue
+                logging.info(f"Loading chromosome [{i+1} of ?] {record.id}")
+                load_chromosome(session, record, genome_db_id)
+
+    genome_db = session.get(Genome, genome_db_id)
+    if not genome_db.organism:
+        organism_info = ncbi_data.get_organism_for_ncbi_assembly_accession(
+            genome_db.accession_value
+        )
+        if organism_info is not None:
+            new_organism, new_tax_id, new_strain = organism_info
+            genome_db.organism = new_organism
+            genome_db.taxon_id = new_tax_id
+            genome_db.strain = new_strain
     session.commit()
     session.close()
 
