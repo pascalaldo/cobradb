@@ -644,11 +644,29 @@ def load_metabolites(session, model_db_id, model):
                 for _comp_db in _universal_component_db.components:
                     if len(_comp_db.reference_mappings) != 1:
                         continue
-                    delta_formula = _comp_db.reference_mappings[
-                        0
-                    ].reference_formula_delta
-                    if delta_formula not in formula_delta_variant_mapping:
-                        formula_delta_variant_mapping[delta_formula] = _comp_db.variant
+                    # delta_formula = _comp_db.reference_mappings[
+                    #     0
+                    # ].reference_formula_delta
+                    delta_formula = utils.Formula(_comp_db.formula) - utils.Formula(
+                        _comp_db.reference_mappings[0].reference_compound.formula
+                    )
+                    normalized_delta = delta_formula - utils.Formula(
+                        {
+                            "H": (
+                                _comp_db.charge
+                                - int(
+                                    _comp_db.reference_mappings[
+                                        0
+                                    ].reference_compound.charge
+                                )
+                            )
+                        }
+                    )
+                    normalized_delta_str = str(normalized_delta)
+                    if normalized_delta_str not in formula_delta_variant_mapping:
+                        formula_delta_variant_mapping[normalized_delta_str] = (
+                            _comp_db.variant
+                        )
                     if _comp_db.charge != charge:
                         continue
                     if comp_formula == utils.Formula(_comp_db.formula):
@@ -656,18 +674,22 @@ def load_metabolites(session, model_db_id, model):
                         break
                 if metabolite_db is None:
                     for _comp_db in _universal_component_db.components:
-                        if _comp_db.charge != charge:
-                            continue
                         if len(_comp_db.reference_mappings) != 1:
                             continue
                         reference_db = _comp_db.reference_mappings[0].reference_compound
                         ref_formula = utils.Formula(reference_db.formula)
                         delta_formula = comp_formula - ref_formula
 
+                        normalized_delta = delta_formula - utils.Formula(
+                            {"H": (charge - int(reference_db.charge))}
+                        )
+
                         if (
-                            delta_formula_str := str(delta_formula)
+                            normalized_delta_str := str(normalized_delta)
                         ) in formula_delta_variant_mapping:
-                            variant = formula_delta_variant_mapping[delta_formula_str]
+                            variant = formula_delta_variant_mapping[
+                                normalized_delta_str
+                            ]
                         else:
                             variant = max(formula_delta_variant_mapping.values()) + 1
 
@@ -688,7 +710,7 @@ def load_metabolites(session, model_db_id, model):
                         component_ref_mapping_db = ComponentReferenceMapping(
                             universal_component=_universal_component_db,
                             reference_compound=reference_db,
-                            reference_formula_delta=delta_formula_str,
+                            reference_formula_delta=str(delta_formula),
                         )
                         metabolite_db.reference_mappings.append(
                             component_ref_mapping_db
