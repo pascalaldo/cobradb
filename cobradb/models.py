@@ -312,6 +312,10 @@ class Genome(Base):
     chromosomes: Mapped[List["Chromosome"]] = relationship(back_populates="genome")
     models: Mapped[List["Model"]] = relationship(back_populates="genome")
 
+    @hybrid_property
+    def ref_string(self):
+        return self.accession_type + ":" + self.accession_value
+
     __table_args__ = (UniqueConstraint("accession_type", "accession_value"),)
 
     def __repr__(self):

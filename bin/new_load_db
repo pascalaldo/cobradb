@@ -156,7 +156,7 @@ def prepare_chebi():
 
 
 def main():
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.WARNING)
     start_time = time.time()
     timings = {}
 

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import gzip
 from os import PathLike
 from pathlib import Path
 from typing import Union
@@ -57,7 +58,7 @@ def process_model(session: Session, model_data, model_filepath: Union[str, PathL
         model.id = f"{model_data['prefix']}{model.id}"
     model_bigg_id = model.id
 
-    # check that the model doesn't already exist
+    # check that the model exists
     if (model_db := utils.get_object_by_bigg_id(session, model_bigg_id, Model)) is None:
         return None, None
     model_db_id = model_db.id
@@ -77,10 +78,14 @@ def process_model(session: Session, model_data, model_filepath: Union[str, PathL
     base_filename = create_model_base_filename(session, model_db.bigg_id)
     model_output_path = Path("/models/models/") / base_filename
     logging.warning(f"Writing corrected model to: {model_output_path}")
-    for gz in ["", ".gz"]:
-        write_sbml_model(model, model_output_path.with_suffix(f".biggr.sbml{gz}"))
-        save_json_model(model, model_output_path.with_suffix(f".biggr.json{gz}"))
-        save_yaml_model(model, str(model_output_path.with_suffix(f".biggr.yaml{gz}")))
+    write_sbml_model(model, model_output_path.with_suffix(".biggr.sbml"))
+    save_json_model(model, model_output_path.with_suffix(".biggr.json"))
+    save_yaml_model(model, str(model_output_path.with_suffix(".biggr.yaml")))
+    for ext in [".biggr.sbml", ".biggr.json", ".biggr.yaml"]:
+        with open(model_output_path.with_suffix(ext), "rb") as f_in, gzip.open(
+            model_output_path.with_suffix(f"{ext}.gz"), "wb"
+        ) as f_out:
+            f_out.writelines(f_in)
     model_db.base_filename = base_filename
     session.commit()
 
